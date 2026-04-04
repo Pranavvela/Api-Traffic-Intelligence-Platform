@@ -1,0 +1,136 @@
+/* ─── Global reset & design tokens ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #0f172a;
+  --surface:     #1e293b;
+  --surface-2:   #273449;
+  --border:      #334155;
+  --text:        #e2e8f0;
+  --text-muted:  #94a3b8;
+  --accent:      #38bdf8;
+  --success:     #4ade80;
+  --warning:     #fbbf24;
+  --danger:      #f87171;
+  --critical:    #e879f9;
+  --radius:      8px;
+  --font:        'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+/* ─── Layout ────────────────────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+
+.navbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; height: 56px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 100;
+}
+.navbar-brand { font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: 0.3px; }
+.navbar-sub   { font-size: 12px; color: var(--text-muted); }
+.navbar-right { display: flex; align-items: center; gap: 16px; }
+.live-badge   {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; color: var(--success);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--success);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+.main { flex: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+
+/* ─── Stats bar ─────────────────────────────────────────────────────────── */
+.stats-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px;
+}
+.stat-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { font-size: 28px; font-weight: 700; color: var(--text); margin-top: 6px; }
+.stat-value.danger   { color: var(--danger); }
+.stat-value.warning  { color: var(--warning); }
+.stat-value.accent   { color: var(--accent); }
+
+/* ─── Panels ────────────────────────────────────────────────────────────── */
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.panel-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.panel-count { font-size: 11px; color: var(--text-muted); background: var(--surface-2); padding: 2px 8px; border-radius: 12px; }
+.panel-body   { overflow-y: auto; max-height: 380px; }
+
+/* ─── Tables ────────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px;
+  background: var(--surface-2); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 1;
+}
+tbody tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
+tbody tr:hover { background: var(--surface-2); }
+tbody td { padding: 8px 12px; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+
+/* ─── Badges ────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.badge-critical { background: rgba(232,121,249,0.15); color: var(--critical); }
+.badge-high     { background: rgba(248,113,113,0.15); color: var(--danger);   }
+.badge-medium   { background: rgba(251,191,36,0.15);  color: var(--warning);  }
+.badge-low      { background: rgba(74,222,128,0.15);  color: var(--success);  }
+.badge-ok       { background: rgba(74,222,128,0.15);  color: var(--success);  }
+.badge-err      { background: rgba(248,113,113,0.15); color: var(--danger);   }
+
+/* ─── Button ────────────────────────────────────────────────────────────── */
+.btn-resolve {
+  font-size: 10px; font-weight: 600; padding: 3px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: all 0.15s; margin-right: 4px;
+}
+.btn-resolve:hover { border-color: var(--success); color: var(--success); }
+
+.btn-block {
+  font-size: 10px; font-weight: 600; padding: 3px 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-block:hover { border-color: var(--danger); color: var(--danger); }
+
+/* ─── Traffic graph ─────────────────────────────────────────────────────── */
+.traffic-graph-panel { min-height: 220px; }
+
+/* ─── Top IPs / Endpoints ───────────────────────────────────────────────── */
+.bottom-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 900px) { .bottom-panels { grid-template-columns: 1fr; } }
+
+.bar-list { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.bar-item  { display: flex; flex-direction: column; gap: 4px; }
+.bar-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text); }
+.bar-track { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.bar-fill  { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.4s; }
+.bar-fill.danger { background: var(--danger); }
+
+/* ─── Empty state ────────────────────────────────────────────────────────── */
+.empty { padding: 32px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+/* ─── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
