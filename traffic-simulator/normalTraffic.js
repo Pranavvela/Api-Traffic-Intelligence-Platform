@@ -1,17 +1,10 @@
 'use strict';
 
 /**
- * High-Traffic Website Simulator
+ * Dynamic Normal-Traffic Simulator
  *
- * Simulates a busy e-commerce / SaaS platform under realistic production load.
- *
- * Behaviour:
- *   • 40 concurrent virtual users, each running their own independent browsing session.
- *   • Every user cycles through realistic page flows: browse → search → login → dashboard.
- *   • Requests fire in parallel across all users — produces 40–80 req/min at baseline.
- *   • Every 2 minutes a "rush hour" spikes concurrency for 20 seconds.
- *   • Diverse IPs drawn from a large pool to simulate a real user base.
- *   • Realistic browser User-Agent strings included on every request.
+ * Pulls registered APIs from the backend and generates realistic traffic
+ * without hardcoding any endpoints.
  *
  * Usage:  node normalTraffic.js
  * Env:    API_URL=http://... (default: http://localhost:4000)
@@ -19,9 +12,7 @@
  */
 
 const axios = require('axios');
-
-const BASE_URL    = process.env.API_URL || 'http://localhost:4000';
-const CONCURRENCY = parseInt(process.env.USERS || '40', 10);
+const { BASE_URL, REQUEST_TIMEOUT_MS, USERS } = require('./config');
 
 // ─── Realistic browser user agents ───────────────────────────────────────────
 const USER_AGENTS = [
@@ -46,95 +37,127 @@ const IP_POOL = [
   ...Array.from({ length: 15 }, (_, i) => `185.${i + 100}.10.5`),
 ];
 
-// ─── Browsing flows ───────────────────────────────────────────────────────────
-// weight controls how often virtual users pick this flow (out of 100).
-const FLOWS = [
-  // Heavy read traffic — product browsing
-  {
-    weight: 35,
-    steps: [
-      { method: 'GET',  path: '/api/products',  label: 'browse products' },
-      { method: 'GET',  path: '/api/search',    label: 'search',           thinkMs: 800 },
-      { method: 'GET',  path: '/api/products',  label: 'refine browse' },
-      { method: 'GET',  path: '/api/dashboard', label: 'view dashboard' },
-    ],
-  },
-  // Authenticated session — login then use the app
-  {
-    weight: 25,
-    steps: [
-      { method: 'POST', path: '/api/login',     label: 'login (success)',
-        data: { username: 'admin', password: 'secret' } },
-      { method: 'GET',  path: '/api/dashboard', label: 'post-login dashboard' },
-      { method: 'GET',  path: '/api/users',     label: 'user list',        thinkMs: 1000 },
-      { method: 'GET',  path: '/api/products',  label: 'browse after login' },
-    ],
-  },
-  // Search-heavy user
-  {
-    weight: 20,
-    steps: [
-      { method: 'GET', path: '/api/search',   label: 'search query 1',  thinkMs: 1200 },
-      { method: 'GET', path: '/api/search',   label: 'search query 2',  thinkMs: 900  },
-      { method: 'GET', path: '/api/products', label: 'view result' },
-      { method: 'GET', path: '/api/search',   label: 'search query 3',  thinkMs: 1500 },
-    ],
-  },
-  // Mobile app polling
-  {
-    weight: 15,
-    steps: [
-      { method: 'GET', path: '/api/dashboard', label: 'mobile poll' },
-      { method: 'GET', path: '/api/products',  label: 'mobile products' },
-    ],
-  },
-  // Admin / internal user
-  {
-    weight: 5,
-    steps: [
-      { method: 'POST', path: '/api/login',     label: 'admin login',
-        data: { username: 'admin', password: 'secret' } },
-      { method: 'GET',  path: '/api/users',     label: 'admin: users' },
-      { method: 'GET',  path: '/api/dashboard', label: 'admin: dashboard' },
-      { method: 'GET',  path: '/api/search',    label: 'admin: search' },
-      { method: 'GET',  path: '/api/products',  label: 'admin: products' },
-    ],
-  },
-];
-
-// Build a weighted array for fast O(1) random selection.
-const WEIGHTED_FLOWS = FLOWS.flatMap((f) => Array(f.weight).fill(f));
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 function pick(arr)           { return arr[Math.floor(Math.random() * arr.length)]; }
 function sleep(ms)           { return new Promise((r) => setTimeout(r, ms)); }
 function jitter(base, extra) { return base + Math.random() * (extra || base); }
 
-let totalRequests = 0;
-const startTime   = Date.now();
+async function fetchRegisteredApis() {
+  const res = await axios.get(`${BASE_URL}/api/list`, { timeout: REQUEST_TIMEOUT_MS });
+  const list = res.data?.data || [];
+  return list.filter((api) => {
+    const type = String(api.api_type || 'INTERNAL').toUpperCase();
+    return api.is_active !== false && api.validation_status !== 'INVALID' && type === 'INTERNAL';
+  });
+}
 
-async function sendRequest(ip, userAgent, step) {
+function buildFlows(apis) {
+  const getApis = apis.filter((a) => a.method === 'GET');
+  const postApis = apis.filter((a) => a.method === 'POST');
+  const writeApis = apis.filter((a) => ['POST', 'PUT', 'PATCH'].includes(a.method));
+
+  const loginApi = writeApis.find((a) => /login|auth/i.test(a.endpoint)) || pick(writeApis || []) || null;
+
+  const flowBrowse = {
+    weight: 35,
+    steps: [
+      makeStep(pick(getApis || apis), 'browse'),
+      makeStep(pick(getApis || apis), 'search', 800),
+      makeStep(pick(getApis || apis), 'refine browse'),
+      makeStep(pick(getApis || apis), 'dashboard view'),
+    ].filter(Boolean),
+  };
+
+  const flowLogin = {
+    weight: 25,
+    steps: [
+      makeStep(loginApi || pick(postApis || apis), 'login', 600, { username: 'admin', password: 'secret' }),
+      makeStep(pick(getApis || apis), 'post-login'),
+      makeStep(pick(getApis || apis), 'account view', 1000),
+      makeStep(pick(getApis || apis), 'browse after login'),
+    ].filter(Boolean),
+  };
+
+  const flowSearchHeavy = {
+    weight: 20,
+    steps: [
+      makeStep(pick(getApis || apis), 'search query 1', 1200),
+      makeStep(pick(getApis || apis), 'search query 2', 900),
+      makeStep(pick(getApis || apis), 'view result'),
+      makeStep(pick(getApis || apis), 'search query 3', 1500),
+    ].filter(Boolean),
+  };
+
+  const flowMobile = {
+    weight: 15,
+    steps: [
+      makeStep(pick(getApis || apis), 'mobile poll'),
+      makeStep(pick(getApis || apis), 'mobile view'),
+    ].filter(Boolean),
+  };
+
+  const flowAdmin = {
+    weight: 5,
+    steps: [
+      makeStep(loginApi || pick(writeApis || apis), 'admin login', 500, { username: 'admin', password: 'secret' }),
+      makeStep(pick(getApis || apis), 'admin list'),
+      makeStep(pick(getApis || apis), 'admin dashboard'),
+      makeStep(pick(getApis || apis), 'admin search'),
+      makeStep(pick(getApis || apis), 'admin overview'),
+    ].filter(Boolean),
+  };
+
+  const flows = [flowBrowse, flowLogin, flowSearchHeavy, flowMobile, flowAdmin]
+    .filter((flow) => flow.steps.length > 0);
+
+  return flows.length > 0 ? flows : [{ weight: 100, steps: apis.map((a) => makeStep(a, 'request')).filter(Boolean) }];
+}
+
+function makeStep(api, label, thinkMs, dataOverride) {
+  if (!api) return null;
+  const payload = dataOverride || (['POST', 'PUT', 'PATCH'].includes(api.method)
+    ? { sample: true, timestamp: Date.now() }
+    : undefined);
+
+  return {
+    method: api.method,
+    path: api.endpoint,
+    label,
+    thinkMs,
+    data: payload,
+  };
+}
+
+async function sendRequest(ip, userAgent, step, summary) {
   try {
     const res = await axios({
       method: step.method,
-      url:    `${BASE_URL}${step.path}`,
-      data:   step.data,
+      url: `${BASE_URL}${step.path}`,
+      data: step.data,
       headers: { 'X-Forwarded-For': ip, 'User-Agent': userAgent },
       validateStatus: () => true,
-      timeout: 5000,
+      timeout: REQUEST_TIMEOUT_MS,
     });
 
-    totalRequests++;
+    if (summary) {
+      summary.requests += 1;
+      summary.endpoints.add(step.path);
+      if (!summary.startTime) summary.startTime = Date.now();
+    }
+
+    const startTime = summary?.startTime || Date.now();
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-    const rpm     = ((totalRequests / (Date.now() - startTime)) * 60000).toFixed(1);
+    const rpm = summary
+      ? ((summary.requests / (Date.now() - startTime)) * 60000).toFixed(1)
+      : '0.0';
 
     console.log(
       `[${String(elapsed).padStart(5)}s | ${String(rpm).padStart(5)} rpm]  ` +
-      `${step.label.padEnd(26)} | ${ip.padEnd(15)} | ` +
+      `${step.label.padEnd(20)} | ${ip.padEnd(15)} | ` +
       `${step.method} ${step.path} → ${res.status}`
     );
   } catch (_) {
-    // Silently absorb timeouts & connection resets — a real website has these.
+    // Silently absorb timeouts & connection resets.
   }
 }
 
@@ -142,49 +165,45 @@ async function sendRequest(ip, userAgent, step) {
  * One virtual user: loops forever, each iteration picks a random flow
  * and executes its steps with realistic think-time pauses between them.
  */
-async function virtualUser(id) {
-  // Stagger startup so all users don't hammer at t=0.
+async function virtualUser(flowPool, summary) {
   await sleep(Math.random() * 8000);
 
-  const ip        = pick(IP_POOL);
+  const ip = pick(IP_POOL);
   const userAgent = pick(USER_AGENTS);
 
   while (true) {
-    const flow = pick(WEIGHTED_FLOWS);
+    const flow = pick(flowPool);
 
     for (const step of flow.steps) {
-      await sendRequest(ip, userAgent, step);
-      // Think time: 300ms base + step-specific extra (simulates reading a page).
+      await sendRequest(ip, userAgent, step, summary);
       await sleep(jitter(300, step.thinkMs || 1000));
     }
 
-    // Session gap: 2–10s before starting a new browsing session.
     await sleep(jitter(2000, 8000));
   }
 }
 
 /**
  * Rush-hour manager: every 2 minutes, spawn extra users for 20 seconds
- * to simulate a flash sale / marketing email blast hitting the site.
+ * to simulate a short-lived spike.
  */
-async function rushHourManager() {
+async function rushHourManager(flowPool, concurrency, summary) {
   while (true) {
     await sleep(120_000);
 
-    const extra = Math.floor(CONCURRENCY / 2);
+    const extra = Math.floor(concurrency / 2);
     console.log(`\n${'─'.repeat(60)}`);
-    console.log(`  RUSH HOUR — +${extra} users for 20s (flash sale simulation)`);
+    console.log(`  RUSH HOUR — +${extra} users for 20s (flash spike)`);
     console.log(`${'─'.repeat(60)}\n`);
 
-    // Launch extra sessions; they will naturally complete their first flow and stop.
-    const burst = Array.from({ length: extra }, (_, i) => {
+    const burst = Array.from({ length: extra }, () => {
       return (async () => {
-        const ip        = pick(IP_POOL);
+        const ip = pick(IP_POOL);
         const userAgent = pick(USER_AGENTS);
-        const flow      = pick(WEIGHTED_FLOWS);
+        const flow = pick(flowPool);
         for (const step of flow.steps) {
-          await sendRequest(ip, userAgent, step);
-          await sleep(jitter(100, 400));   // faster during rush
+          await sendRequest(ip, userAgent, step, summary);
+          await sleep(jitter(100, 400));
         }
       })();
     });
@@ -195,24 +214,37 @@ async function rushHourManager() {
   }
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
-async function run() {
+async function run(options = {}) {
+  const summary = options.summary || null;
+  const apis = await fetchRegisteredApis();
+  if (apis.length === 0) {
+    console.error('[Simulator] No registered APIs found. Register endpoints first.');
+    process.exit(1);
+  }
+
+  const flows = buildFlows(apis);
+  const weightedFlows = flows.flatMap((f) => Array(f.weight).fill(f));
+
   console.log(`\n${'═'.repeat(60)}`);
-  console.log(`  High-Traffic Website Simulator`);
+  console.log('  Dynamic Normal-Traffic Simulator');
   console.log(`  Target  : ${BASE_URL}`);
-  console.log(`  Users   : ${CONCURRENCY} concurrent virtual users`);
-  console.log(`  Expected: ~40–80 req/min (spikes to ~120 during rush hour)`);
+  console.log(`  Users   : ${USERS} concurrent virtual users`);
+  console.log(`  APIs    : ${apis.length} registered endpoints`);
   console.log(`${'═'.repeat(60)}\n`);
 
   const workers = [
-    ...Array.from({ length: CONCURRENCY }, (_, i) => virtualUser(i)),
-    rushHourManager(),
+    ...Array.from({ length: USERS }, () => virtualUser(weightedFlows, summary)),
+    rushHourManager(weightedFlows, USERS, summary),
   ];
 
   await Promise.all(workers);
 }
 
-run().catch((err) => {
-  console.error('[Simulator] Fatal:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  run().catch((err) => {
+    console.error('[Simulator] Fatal:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { run };

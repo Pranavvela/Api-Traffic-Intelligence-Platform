@@ -30,7 +30,17 @@ module.exports = {
     burstMultiplier: parseFloat(process.env.BURST_MULTIPLIER) || 3,
   },
 
+  throttling: {
+    durationMs: parseInt(process.env.THROTTLE_DURATION_MS, 10) || 300000,
+    windowMs: parseInt(process.env.THROTTLE_WINDOW_MS, 10) || 60000,
+    threshold: parseInt(process.env.THROTTLE_THRESHOLD, 10) || (parseInt(process.env.RATE_LIMIT_THRESHOLD, 10) || 10),
+  },
+
+  ml: {
+    serviceUrl: process.env.ML_SERVICE_URL || '',
+  },
+
   cors: {
-    clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:3000',
+    clientOrigin: process.env.CLIENT_ORIGIN || 'http://api-sentinel.local:8080',
   },
 };

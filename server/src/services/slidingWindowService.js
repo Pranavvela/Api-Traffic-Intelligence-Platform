@@ -1,7 +1,7 @@
 'use strict';
 
 const { windowStart } = require('../utils/timeUtils');
-const config = require('../config/config');
+const settingsService = require('./settingsService');
 
 /**
  * In-memory sliding window store.
@@ -81,7 +81,7 @@ function currentRate(key, observationMs = 10_000) {
  * @returns {number}
  */
 function rollingAvgRate(key, observationMs = 10_000) {
-  const windowMs = config.detection.windowSizeMs;
+  const windowMs = settingsService.getSettings().slidingWindowSeconds * 1000;
   const now = Date.now();
   const windowBoundary = now - windowMs;
   const observationBoundary = now - observationMs;
@@ -133,7 +133,8 @@ function ipBurstKey(ip) {
  * @param {number} [customWindowMs]
  */
 function evict(key, customWindowMs) {
-  const boundary = windowStart(customWindowMs || config.detection.windowSizeMs);
+  const windowMs = customWindowMs || (settingsService.getSettings().slidingWindowSeconds * 1000);
+  const boundary = windowStart(windowMs);
   const timestamps = windowStore.get(key);
   if (!timestamps) return;
 

@@ -1,7 +1,7 @@
 'use strict';
 
-const config = require('../config/config');
 const sw = require('./slidingWindowService');
+const settingsService = require('./settingsService');
 
 /**
  * Rule definitions.
@@ -20,7 +20,7 @@ const rules = [
       const { ip, endpoint } = logEntry;
       const key = sw.rateKey(ip, endpoint);
       const requestCount = sw.count(key);
-      const threshold = config.detection.rateLimitThreshold;
+      const threshold = settingsService.getSettings().rateLimitThreshold;
 
       if (requestCount > threshold) {
         return {
@@ -45,7 +45,7 @@ const rules = [
 
       const key = sw.loginFailKey(ip);
       const failCount = sw.count(key);
-      const threshold = config.detection.loginFailureThreshold;
+      const threshold = settingsService.getSettings().bruteForceThreshold;
 
       if (failCount > threshold) {
         return {
@@ -65,7 +65,7 @@ const rules = [
       const { ip, endpoint } = logEntry;
       const key = sw.rateKey(ip, endpoint);
       const requestCount = sw.count(key);
-      const threshold = config.detection.floodThreshold;
+      const threshold = settingsService.getSettings().endpointFloodThreshold;
 
       if (requestCount > threshold) {
         return {
@@ -87,7 +87,7 @@ const rules = [
 
       const current = sw.currentRate(key);       // req/s over last 10s
       const baseline = sw.rollingAvgRate(key);   // req/s over the rest of the window
-      const multiplier = config.detection.burstMultiplier;
+      const multiplier = settingsService.getSettings().burstMultiplier;
 
       // Only fire when there is a meaningful baseline to compare against.
       if (baseline < 0.1) return { violated: false };
@@ -112,7 +112,7 @@ const rules = [
 
       const current  = sw.currentRate(key);      // req/s over last 10s
       const baseline = sw.rollingAvgRate(key);    // req/s over rest of window
-      const multiplier = config.detection.burstMultiplier;
+      const multiplier = settingsService.getSettings().burstMultiplier;
 
       if (baseline < 0.1) return { violated: false };
 
@@ -136,7 +136,7 @@ const rules = [
       const { ip, endpoint } = logEntry;
       const key      = sw.rateKey(ip, endpoint);
       const count30s = sw.count(key, 30_000);          // last 30s specifically
-      const threshold = config.detection.floodThreshold;
+      const threshold = settingsService.getSettings().endpointFloodThreshold;
 
       if (count30s > threshold) {
         return {

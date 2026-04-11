@@ -11,6 +11,12 @@ const apiRoutes = require('./routes/apiRoutes');
 const alertRoutes = require('./routes/alertRoutes');
 const statsRoutes = require('./routes/statsRoutes');
 const blocklistRoutes = require('./routes/blocklistRoutes');
+const registeredApiRoutes = require('./routes/registeredApiRoutes');
+const mlRoutes = require('./routes/mlRoutes');
+const blockedIpsRoutes = require('./routes/blockedIpsRoutes');
+const settingsRoutes = require('./routes/settingsRoutes');
+const simulatorRoutes = require('./routes/simulatorRoutes');
+const threatAnalysisRoutes = require('./routes/threatAnalysisRoutes');
 
 const app = express();
 
@@ -71,6 +77,12 @@ app.use('/api/logs',     apiRoutes);
 app.use('/api/alerts',   alertRoutes);
 app.use('/api/stats',    statsRoutes);
 app.use('/api/block-ip', blocklistRoutes);
+app.use('/api', registeredApiRoutes);
+app.use('/api', blockedIpsRoutes);
+app.use('/api', settingsRoutes);
+app.use('/api', simulatorRoutes);
+app.use('/api', threatAnalysisRoutes);
+app.use('/ml', mlRoutes);
 
 // ─── 404 handler ──────────────────────────────────────────────────────────────
 app.use((_req, res) => {

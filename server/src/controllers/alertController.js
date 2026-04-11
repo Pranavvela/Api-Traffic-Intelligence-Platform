@@ -1,6 +1,18 @@
 'use strict';
 
-const { getAlerts, resolveAlert, countUnresolved, getAlertsByRule, getResolvedAlerts } = require('../models/alertModel');
+const {
+  getAlerts,
+  resolveAlert,
+  countUnresolved,
+  getAlertsByRule,
+  getResolvedAlerts,
+  getAlertById,
+  resolveAlertWithMitigation,
+  clearAllAlerts,
+} = require('../models/alertModel');
+const blocklist = require('../services/blocklistService');
+const throttling = require('../services/throttlingService');
+const settingsService = require('../services/settingsService');
 
 /**
  * GET /api/alerts
@@ -40,10 +52,43 @@ async function markResolved(req, res, next) {
       return res.status(400).json({ success: false, message: 'Invalid alert ID.' });
     }
 
-    const updated = await resolveAlert(id);
-    if (!updated) {
+    const alert = await getAlertById(id);
+    if (!alert) {
       return res.status(404).json({ success: false, message: 'Alert not found.' });
     }
+
+    if (alert.resolved) {
+      return res.json({ success: true, data: alert });
+    }
+
+    const resolvedBy = req.body?.resolved_by || 'system';
+    const rule = alert.rule_triggered;
+    const ip = alert.ip;
+    const settings = settingsService.getSettings();
+
+    let mitigationAction = 'NONE';
+
+    if (rule === 'REPEATED_LOGIN_FAILURE') {
+      if (settings.autoBlockEnabled) {
+        await blocklist.blockIp(ip, `Mitigation: ${rule} (alert #${alert.id}).`);
+        mitigationAction = 'BLOCKED';
+      }
+    } else if (rule === 'RATE_LIMIT_VIOLATION') {
+      throttling.throttleIp(ip);
+      mitigationAction = 'THROTTLED';
+    } else if (rule === 'ENDPOINT_FLOODING' || rule === 'ENDPOINT_FLOOD') {
+      if (settings.autoBlockEnabled) {
+        await blocklist.blockIp(ip, `Mitigation: ${rule} (alert #${alert.id}).`);
+        mitigationAction = 'BLOCKED';
+      }
+    } else if (rule === 'BURST_DETECTION' || rule === 'BURST_TRAFFIC') {
+      mitigationAction = 'MONITORED';
+    }
+
+    const updated = await resolveAlertWithMitigation(id, {
+      resolvedBy,
+      mitigationAction,
+    });
 
     res.json({ success: true, data: updated });
   } catch (err) {
@@ -80,4 +125,17 @@ async function alertHistory(req, res, next) {
   }
 }
 
-module.exports = { listAlerts, markResolved, alertsByRule, alertHistory };
+/**
+ * POST /api/alerts/reset
+ * Clears all alert records (unresolved + history).
+ */
+async function resetAlerts(_req, res, next) {
+  try {
+    await clearAllAlerts();
+    res.json({ success: true, message: 'All alerts cleared.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { listAlerts, markResolved, alertsByRule, alertHistory, resetAlerts };

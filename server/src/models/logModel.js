@@ -8,17 +8,55 @@ const { query } = require('../config/db');
  * @returns {Promise<Object>} Inserted row
  */
 async function insertLog(log) {
-  const { requestId, ip, method, endpoint, statusCode, responseMs, userAgent, timestamp } = log;
+  const {
+    requestId,
+    ip,
+    method,
+    endpoint,
+    statusCode,
+    responseMs,
+    userAgent,
+    alertTriggered,
+    isBlocked,
+    timestamp,
+  } = log;
 
   const result = await query(
     `INSERT INTO api_logs
-       (request_id, ip, method, endpoint, status_code, response_ms, user_agent, timestamp)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (request_id, ip, method, endpoint, status_code, response_ms, user_agent, alert_triggered, is_blocked, timestamp)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
-    [requestId, ip, method, endpoint, statusCode, responseMs, userAgent, timestamp]
+    [
+      requestId,
+      ip,
+      method,
+      endpoint,
+      statusCode,
+      responseMs,
+      userAgent,
+      Boolean(alertTriggered),
+      Boolean(isBlocked),
+      timestamp,
+    ]
   );
 
   return result.rows[0];
+}
+
+/**
+ * Update alert_triggered for a log entry.
+ * @param {string} requestId
+ * @returns {Promise<Object|null>}
+ */
+async function markAlertTriggered(requestId) {
+  const result = await query(
+    `UPDATE api_logs
+     SET alert_triggered = TRUE
+     WHERE request_id = $1
+     RETURNING *`,
+    [requestId]
+  );
+  return result.rows[0] || null;
 }
 
 /**
@@ -148,6 +186,7 @@ async function getTrafficByMinute(minutes = 5) {
 
 module.exports = {
   insertLog,
+  markAlertTriggered,
   getRecentLogs,
   countRequestsInWindow,
   countFailedLogins,

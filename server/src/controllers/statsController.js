@@ -11,26 +11,28 @@ const { getTopAttackers } = require('../services/attackerScoringService');
 async function getSummary(req, res, next) {
   try {
     const windowMs = parseInt(req.query.windowMs, 10) || 60_000;
+    const rpmWindowMs = parseInt(req.query.rpmWindowMs, 10) || 300_000;
 
-    const [requestCount, unresolvedAlerts, topIps, endpointStats] = await Promise.all([
+    const [requestCount, rpmCount, unresolvedAlerts, topIps, endpointStats, topAttackers] = await Promise.all([
       countRequestsInLastWindow(windowMs),
+      countRequestsInLastWindow(rpmWindowMs),
       countUnresolved(),
       getTopIps(windowMs, 10),
       getEndpointStats(windowMs),
+      getTopAttackers(windowMs, 5),
     ]);
 
-    const requestsPerMinute =
-      windowMs === 60_000
-        ? requestCount
-        : Math.round((requestCount / windowMs) * 60_000);
+    const requestsPerMinute = Math.round((rpmCount / rpmWindowMs) * 60_000);
 
     res.json({
       success: true,
       data: {
         windowMs,
+        rpmWindowMs,
         requestCount,
         requestsPerMinute,
         unresolvedAlerts,
+        threatScore: topAttackers.reduce((sum, row) => sum + (row.score || 0), 0),
         topIps,
         endpointStats,
       },

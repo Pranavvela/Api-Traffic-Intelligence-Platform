@@ -8,14 +8,36 @@ const { query } = require('../config/db');
  * @returns {Promise<Object>} Inserted row
  */
 async function insertAlert(alert) {
-  const { requestId, ruleTriggered, ip, endpoint, reason, severity } = alert;
+  const {
+    requestId,
+    ruleTriggered,
+    ip,
+    endpoint,
+    reason,
+    severity,
+    source,
+    anomalyScore,
+    mlExplainability,
+    mlLabel,
+  } = alert;
 
   const result = await query(
     `INSERT INTO alerts
-       (request_id, rule_triggered, ip, endpoint, reason, severity)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (request_id, rule_triggered, ip, endpoint, reason, severity, source, anomaly_score, ml_explainability, ml_label)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
-    [requestId || null, ruleTriggered, ip, endpoint, reason, severity || 'medium']
+    [
+      requestId || null,
+      ruleTriggered,
+      ip,
+      endpoint,
+      reason,
+      severity || 'medium',
+      source || 'RULE',
+      anomalyScore ?? null,
+      mlExplainability ?? null,
+      mlLabel || null,
+    ]
   );
 
   return result.rows[0];
@@ -55,12 +77,48 @@ async function resolveAlert(id) {
 }
 
 /**
+ * Fetch an alert by id.
+ * @param {number} id
+ * @returns {Promise<Object|null>}
+ */
+async function getAlertById(id) {
+  const result = await query(
+    `SELECT * FROM alerts WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * Resolve an alert with mitigation metadata.
+ * @param {number} id
+ * @param {Object} opts
+ * @param {string} [opts.resolvedBy]
+ * @param {string} [opts.mitigationAction]
+ * @returns {Promise<Object|null>}
+ */
+async function resolveAlertWithMitigation(id, opts = {}) {
+  const { resolvedBy, mitigationAction } = opts;
+  const result = await query(
+    `UPDATE alerts
+     SET resolved = TRUE,
+         resolved_at = NOW(),
+         resolved_by = $2,
+         mitigation_action = $3
+     WHERE id = $1
+     RETURNING *`,
+    [id, resolvedBy || null, mitigationAction || null]
+  );
+  return result.rows[0] || null;
+}
+
+/**
  * Count unresolved alerts.
  * @returns {Promise<number>}
  */
 async function countUnresolved() {
   const result = await query(
-    `SELECT COUNT(*) AS cnt FROM alerts WHERE resolved = FALSE`
+    `SELECT COALESCE(SUM(alert_count), 0) AS cnt FROM alerts WHERE resolved = FALSE`
   );
   return parseInt(result.rows[0].cnt, 10);
 }
@@ -137,13 +195,24 @@ async function getResolvedAlerts({ limit = 100, offset = 0 } = {}) {
   return result.rows;
 }
 
+/**
+ * Delete all alerts (resets timeline and unresolved counts).
+ * @returns {Promise<void>}
+ */
+async function clearAllAlerts() {
+  await query('TRUNCATE TABLE alerts RESTART IDENTITY');
+}
+
 module.exports = {
   insertAlert,
   getAlerts,
   resolveAlert,
+  getAlertById,
+  resolveAlertWithMitigation,
   countUnresolved,
   getAlertsByRule,
   findRecentDuplicate,
   incrementAlertCount,
   getResolvedAlerts,
+  clearAllAlerts,
 };

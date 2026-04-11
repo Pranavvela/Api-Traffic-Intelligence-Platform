@@ -6,6 +6,7 @@ const app = require('./src/app');
 const { initDb } = require('./src/config/db');
 const config = require('./src/config/config');
 const blocklist = require('./src/services/blocklistService');
+const settingsService = require('./src/services/settingsService');
 
 const PORT = config.server.port;
 
@@ -16,6 +17,9 @@ async function start() {
 
     // Seed the in-memory blocklist from the database.
     await blocklist.seedCache();
+
+    // Seed settings cache from the database.
+    await settingsService.loadSettings();
 
     app.listen(PORT, () => {
       const envStr  = config.server.nodeEnv;

@@ -34,6 +34,23 @@ async function unblockIpHandler(req, res, next) {
 }
 
 /**
+ * POST /api/unblock-ip
+ * Body: { ip: string }
+ */
+async function unblockIpBodyHandler(req, res, next) {
+  try {
+    const { ip } = req.body;
+    if (!ip || typeof ip !== 'string') {
+      return res.status(400).json({ success: false, message: 'ip is required.' });
+    }
+    await unblockIp(ip.trim());
+    res.json({ success: true, message: `IP ${ip} unblocked.` });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/block-ip
  * List all blocked IPs.
  */
@@ -46,4 +63,4 @@ async function listBlockedIpsHandler(req, res, next) {
   }
 }
 
-module.exports = { blockIpHandler, unblockIpHandler, listBlockedIpsHandler };
+module.exports = { blockIpHandler, unblockIpHandler, unblockIpBodyHandler, listBlockedIpsHandler };
