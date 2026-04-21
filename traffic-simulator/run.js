@@ -1,6 +1,7 @@
+// run.js - Main entry point for the traffic simulator, orchestrating normal and attack traffic generation based on the selected mode.
 'use strict';
 
-const { SUMMARY_INTERVAL_MS, ATTACK_INTERVAL_MS } = require('./config');
+const { SUMMARY_INTERVAL_MS, ATTACK_INTERVAL_MS, RUN_DURATION_MS, SAFE_MODE } = require('./config');
 const normal = require('./normalTraffic');
 const attack = require('./attackTraffic');
 
@@ -37,6 +38,8 @@ function printSummary(summary) {
 
 async function run() {
   const summary = createSummary(MODE);
+  const runStart = Date.now();
+  const shouldStop = () => Date.now() - runStart >= RUN_DURATION_MS;
 
   const intervalId = setInterval(() => printSummary(summary), SUMMARY_INTERVAL_MS);
 
@@ -49,21 +52,26 @@ async function run() {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
+  console.log(`[Simulator] Mode=${MODE} | Safe=${SAFE_MODE ? 'ON' : 'OFF'} | Duration=${Math.round(RUN_DURATION_MS / 1000)}s`);
+
   if (MODE === 'normal') {
-    await normal.run({ summary });
+    await normal.run({ summary, shouldStop });
+    shutdown();
     return;
   }
 
   if (MODE === 'attack') {
-    await attack.run({ summary });
+    await attack.run({ summary, shouldStop });
+    shutdown();
     return;
   }
 
   if (MODE === 'mixed') {
     await Promise.all([
-      normal.run({ summary }),
-      attack.run({ summary, loop: true, intervalMs: ATTACK_INTERVAL_MS }),
+      normal.run({ summary, shouldStop }),
+      attack.run({ summary, shouldStop, loop: true, intervalMs: ATTACK_INTERVAL_MS }),
     ]);
+    shutdown();
     return;
   }
 

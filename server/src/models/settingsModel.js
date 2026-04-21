@@ -2,27 +2,43 @@
 
 const { query } = require('../config/db');
 
-async function getSettingsRow() {
+async function getSettingsRow(userId) {
+  if (!userId) return null;
+
   const result = await query(
-    `SELECT * FROM settings WHERE id = 1`
+    `SELECT * FROM user_settings WHERE user_id = $1`,
+    [userId]
   );
   return result.rows[0] || null;
 }
 
-async function updateSettingsRow(row) {
+async function updateSettingsRow(userId, row) {
+  if (!userId) return null;
+
   const result = await query(
-    `UPDATE settings
-     SET rate_limit_threshold = $1,
-         brute_force_threshold = $2,
-         endpoint_flood_threshold = $3,
-         burst_multiplier = $4,
-         sliding_window_seconds = $5,
-         throttle_duration_minutes = $6,
-         auto_block_enabled = $7,
-         updated_at = NOW()
-     WHERE id = 1
+    `INSERT INTO user_settings (
+       user_id,
+       rate_limit_threshold,
+       brute_force_threshold,
+       endpoint_flood_threshold,
+       burst_multiplier,
+       sliding_window_seconds,
+       throttle_duration_minutes,
+       auto_block_enabled
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (user_id) DO UPDATE SET
+       rate_limit_threshold = EXCLUDED.rate_limit_threshold,
+       brute_force_threshold = EXCLUDED.brute_force_threshold,
+       endpoint_flood_threshold = EXCLUDED.endpoint_flood_threshold,
+       burst_multiplier = EXCLUDED.burst_multiplier,
+       sliding_window_seconds = EXCLUDED.sliding_window_seconds,
+       throttle_duration_minutes = EXCLUDED.throttle_duration_minutes,
+       auto_block_enabled = EXCLUDED.auto_block_enabled,
+       updated_at = NOW()
      RETURNING *`,
     [
+      userId,
       row.rate_limit_threshold,
       row.brute_force_threshold,
       row.endpoint_flood_threshold,

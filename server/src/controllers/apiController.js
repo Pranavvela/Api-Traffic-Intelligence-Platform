@@ -12,9 +12,9 @@ const { getRecentLogs } = require('../models/logModel');
  */
 async function getLogs(req, res, next) {
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
-    const offset = parseInt(req.query.offset, 10) || 0;
-    const logs = await getRecentLogs(limit, offset);
+    const limit = Math.min(Number.parseInt(req.query.limit, 10) || 100, 500);
+    const offset = Number.parseInt(req.query.offset, 10) || 0;
+    const logs = await getRecentLogs(limit, offset, req.user?.id || null);
     res.json({ success: true, count: logs.length, data: logs });
   } catch (err) {
     next(err);

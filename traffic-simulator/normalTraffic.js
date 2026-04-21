@@ -1,3 +1,5 @@
+//normalTraffic.js - Simulates realistic normal traffic patterns against registered APIs, with dynamic flow generation and a large IP pool.
+
 'use strict';
 
 /**
@@ -12,7 +14,20 @@
  */
 
 const axios = require('axios');
-const { BASE_URL, REQUEST_TIMEOUT_MS, USERS } = require('./config');
+const {
+  BASE_URL,
+  REQUEST_TIMEOUT_MS,
+  USERS,
+  MAX_IN_FLIGHT,
+  ENABLE_RUSH_HOUR,
+  ALLOW_WRITE_NORMAL,
+  SAFE_MODE,
+  EXCLUDED_ENDPOINT_PATTERNS,
+  SIMULATOR_SOURCE,
+  SIMULATOR_IP_FALLBACK,
+  SIM_AUTH_HEADER,
+  SIM_AUTH_TOKEN,
+} = require('./config');
 
 // ─── Realistic browser user agents ───────────────────────────────────────────
 const USER_AGENTS = [
@@ -42,21 +57,80 @@ function pick(arr)           { return arr[Math.floor(Math.random() * arr.length)
 function sleep(ms)           { return new Promise((r) => setTimeout(r, ms)); }
 function jitter(base, extra) { return base + Math.random() * (extra || base); }
 
+function resolveRequestUrl(endpoint) {
+  const raw = String(endpoint || '').trim();
+  if (!raw) return BASE_URL;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${BASE_URL}${raw}`;
+  return `${BASE_URL}/${raw}`;
+}
+
+function isExcludedEndpoint(endpoint) {
+  const value = String(endpoint || '').toLowerCase();
+  return EXCLUDED_ENDPOINT_PATTERNS.some((pattern) => value.includes(String(pattern).toLowerCase()));
+}
+
+function createLimiter(limit) {
+  let active = 0;
+  const queue = [];
+
+  async function withLimit(task) {
+    if (active >= limit) {
+      await new Promise((resolve) => queue.push(resolve));
+    }
+
+    active += 1;
+    try {
+      return await task();
+    } finally {
+      active -= 1;
+      const next = queue.shift();
+      if (next) next();
+    }
+  }
+
+  return { withLimit };
+}
+
+function buildAuthHeaders() {
+  if (!SIM_AUTH_TOKEN) return {};
+  const token = SIM_AUTH_TOKEN.startsWith('Bearer ') ? SIM_AUTH_TOKEN : `Bearer ${SIM_AUTH_TOKEN}`;
+  return { [SIM_AUTH_HEADER]: token };
+}
+
 async function fetchRegisteredApis() {
-  const res = await axios.get(`${BASE_URL}/api/list`, { timeout: REQUEST_TIMEOUT_MS });
+  let res;
+  try {
+    res = await axios.get(`${BASE_URL}/api/list`, {
+      timeout: REQUEST_TIMEOUT_MS,
+      headers: buildAuthHeaders(),
+    });
+  } catch (err) {
+    if (err?.response?.status === 401 || err?.response?.status === 403) {
+      throw new Error('Unauthorized to list registered APIs. Set SIM_AUTH_TOKEN (JWT) in traffic-simulator/.env.');
+    }
+    throw err;
+  }
   const list = res.data?.data || [];
   return list.filter((api) => {
     const type = String(api.api_type || 'INTERNAL').toUpperCase();
+    const method = String(api.method || 'GET').toUpperCase();
+    const endpoint = String(api.endpoint || '');
+    const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+    if (!ALLOW_WRITE_NORMAL && isWrite) return false;
+    if (isExcludedEndpoint(endpoint)) return false;
     return api.is_active !== false && api.validation_status !== 'INVALID' && type === 'INTERNAL';
   });
 }
 
 function buildFlows(apis) {
   const getApis = apis.filter((a) => a.method === 'GET');
-  const postApis = apis.filter((a) => a.method === 'POST');
+  const postApis = ALLOW_WRITE_NORMAL ? apis.filter((a) => a.method === 'POST') : [];
   const writeApis = apis.filter((a) => ['POST', 'PUT', 'PATCH'].includes(a.method));
 
-  const loginApi = writeApis.find((a) => /login|auth/i.test(a.endpoint)) || pick(writeApis || []) || null;
+  const loginApi = ALLOW_WRITE_NORMAL
+    ? writeApis.find((a) => /login|auth/i.test(a.endpoint)) || pick(writeApis || []) || null
+    : null;
 
   const flowBrowse = {
     weight: 35,
@@ -69,7 +143,7 @@ function buildFlows(apis) {
   };
 
   const flowLogin = {
-    weight: 25,
+    weight: ALLOW_WRITE_NORMAL ? 25 : 0,
     steps: [
       makeStep(loginApi || pick(postApis || apis), 'login', 600, { username: 'admin', password: 'secret' }),
       makeStep(pick(getApis || apis), 'post-login'),
@@ -97,7 +171,7 @@ function buildFlows(apis) {
   };
 
   const flowAdmin = {
-    weight: 5,
+    weight: ALLOW_WRITE_NORMAL ? 5 : 0,
     steps: [
       makeStep(loginApi || pick(writeApis || apis), 'admin login', 500, { username: 'admin', password: 'secret' }),
       makeStep(pick(getApis || apis), 'admin list'),
@@ -108,7 +182,7 @@ function buildFlows(apis) {
   };
 
   const flows = [flowBrowse, flowLogin, flowSearchHeavy, flowMobile, flowAdmin]
-    .filter((flow) => flow.steps.length > 0);
+    .filter((flow) => flow.weight > 0 && flow.steps.length > 0);
 
   return flows.length > 0 ? flows : [{ weight: 100, steps: apis.map((a) => makeStep(a, 'request')).filter(Boolean) }];
 }
@@ -128,54 +202,51 @@ function makeStep(api, label, thinkMs, dataOverride) {
   };
 }
 
-async function sendRequest(ip, userAgent, step, summary) {
+async function sendRequest(ip, userAgent, step, summary, limiter) {
   try {
-    const res = await axios({
+    const simulatorIp = ip || SIMULATOR_IP_FALLBACK;
+
+    const requestUrl = `${BASE_URL}/proxy/${resolveRequestUrl(step.path)}`;
+
+    const res = await limiter.withLimit(() => axios({
       method: step.method,
-      url: `${BASE_URL}${step.path}`,
+      url: requestUrl,
       data: step.data,
-      headers: { 'X-Forwarded-For': ip, 'User-Agent': userAgent },
+      headers: {
+        'X-Forwarded-For': simulatorIp,
+        'User-Agent': userAgent,
+        'X-Simulator-Traffic': 'true',
+        'X-Simulator-Mode': 'normal',
+        'Authorization': `Bearer ${SIM_AUTH_TOKEN}`, // ✅ IMPORTANT
+      },
       validateStatus: () => true,
       timeout: REQUEST_TIMEOUT_MS,
-    });
+    }));
 
     if (summary) {
       summary.requests += 1;
       summary.endpoints.add(step.path);
-      if (!summary.startTime) summary.startTime = Date.now();
     }
 
-    const startTime = summary?.startTime || Date.now();
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-    const rpm = summary
-      ? ((summary.requests / (Date.now() - startTime)) * 60000).toFixed(1)
-      : '0.0';
-
-    console.log(
-      `[${String(elapsed).padStart(5)}s | ${String(rpm).padStart(5)} rpm]  ` +
-      `${step.label.padEnd(20)} | ${ip.padEnd(15)} | ` +
-      `${step.method} ${step.path} → ${res.status}`
-    );
-  } catch (_) {
-    // Silently absorb timeouts & connection resets.
-  }
+  } catch {}
 }
 
 /**
  * One virtual user: loops forever, each iteration picks a random flow
  * and executes its steps with realistic think-time pauses between them.
  */
-async function virtualUser(flowPool, summary) {
+async function virtualUser(flowPool, summary, limiter, shouldStop) {
   await sleep(Math.random() * 8000);
 
   const ip = pick(IP_POOL);
   const userAgent = pick(USER_AGENTS);
 
-  while (true) {
+  while (!shouldStop()) {
     const flow = pick(flowPool);
 
     for (const step of flow.steps) {
-      await sendRequest(ip, userAgent, step, summary);
+      if (shouldStop()) break;
+      await sendRequest(ip, userAgent, step, summary, limiter);
       await sleep(jitter(300, step.thinkMs || 1000));
     }
 
@@ -187,9 +258,10 @@ async function virtualUser(flowPool, summary) {
  * Rush-hour manager: every 2 minutes, spawn extra users for 20 seconds
  * to simulate a short-lived spike.
  */
-async function rushHourManager(flowPool, concurrency, summary) {
-  while (true) {
+async function rushHourManager(flowPool, concurrency, summary, limiter, shouldStop) {
+  while (!shouldStop()) {
     await sleep(120_000);
+    if (shouldStop()) break;
 
     const extra = Math.floor(concurrency / 2);
     console.log(`\n${'─'.repeat(60)}`);
@@ -202,7 +274,8 @@ async function rushHourManager(flowPool, concurrency, summary) {
         const userAgent = pick(USER_AGENTS);
         const flow = pick(flowPool);
         for (const step of flow.steps) {
-          await sendRequest(ip, userAgent, step, summary);
+          if (shouldStop()) break;
+          await sendRequest(ip, userAgent, step, summary, limiter);
           await sleep(jitter(100, 400));
         }
       })();
@@ -216,10 +289,12 @@ async function rushHourManager(flowPool, concurrency, summary) {
 
 async function run(options = {}) {
   const summary = options.summary || null;
+  const limiter = createLimiter(Math.max(1, MAX_IN_FLIGHT));
+  const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
   const apis = await fetchRegisteredApis();
   if (apis.length === 0) {
-    console.error('[Simulator] No registered APIs found. Register endpoints first.');
-    process.exit(1);
+    console.error('[Simulator] No eligible registered APIs found. Register safe INTERNAL endpoints first.');
+    return;
   }
 
   const flows = buildFlows(apis);
@@ -229,13 +304,16 @@ async function run(options = {}) {
   console.log('  Dynamic Normal-Traffic Simulator');
   console.log(`  Target  : ${BASE_URL}`);
   console.log(`  Users   : ${USERS} concurrent virtual users`);
+  console.log(`  Safe    : ${SAFE_MODE ? 'ON' : 'OFF'}`);
+  console.log(`  Writes  : ${ALLOW_WRITE_NORMAL ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`  InFlight: ${MAX_IN_FLIGHT}`);
   console.log(`  APIs    : ${apis.length} registered endpoints`);
   console.log(`${'═'.repeat(60)}\n`);
 
-  const workers = [
-    ...Array.from({ length: USERS }, () => virtualUser(weightedFlows, summary)),
-    rushHourManager(weightedFlows, USERS, summary),
-  ];
+  const workers = Array.from({ length: USERS }, () => virtualUser(weightedFlows, summary, limiter, shouldStop));
+  if (ENABLE_RUSH_HOUR) {
+    workers.push(rushHourManager(weightedFlows, USERS, summary, limiter, shouldStop));
+  }
 
   await Promise.all(workers);
 }

@@ -1,7 +1,7 @@
 'use strict';
 
 const { Router } = require('express');
-const { getFeatures, exportFeatures, trainModel, detectAnomalies, getStatus } = require('../controllers/mlController');
+const { getFeatures, exportFeatures, trainModel, detectAnomalies, getStatus, listModels, activateModel } = require('../controllers/mlController');
 
 const router = Router();
 
@@ -19,5 +19,11 @@ router.get('/detect', detectAnomalies);
 
 // GET /ml/status
 router.get('/status', getStatus);
+
+// GET /ml/models
+router.get('/models', listModels);
+
+// POST /ml/models/:id/activate
+router.post(String.raw`/models/:id(\d+)/activate`, activateModel);
 
 module.exports = router;

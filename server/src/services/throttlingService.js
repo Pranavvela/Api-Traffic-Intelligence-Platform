@@ -2,58 +2,51 @@
 
 const sw = require('./slidingWindowService');
 const settingsService = require('./settingsService');
+const { createTtlStore } = require('./store');
 
-const throttled = new Map();
+const throttled = createTtlStore();
 
-function throttleKey(ip) {
-  return `throttle:${ip}`;
+function scope(userId, ip) {
+  return `${userId}:${ip}`;
 }
 
-function nowMs() {
-  return Date.now();
+function throttleKey(userId, ip, endpoint) {
+  return `throttle:${scope(userId, ip)}:${endpoint}`;
 }
 
-/**
- * Mark an IP as throttled for a duration.
- * @param {string} ip
- * @param {number} [durationMs]
- */
-function throttleIp(ip, durationMs) {
-  const settings = settingsService.getSettings();
-  const ttl = durationMs || (settings.throttleDurationMinutes * 60_000);
-  throttled.set(ip, nowMs() + ttl);
+function throttleIp(userId, ip, durationMs) {
+  if (!userId) return;
+
+  const settings = settingsService.getSettings(userId);
+  const ttl = durationMs || settings.throttleDurationMinutes * 60000;
+  throttled.set(scope(userId, ip), true, ttl);
 }
 
-/**
- * Check if an IP is currently throttled.
- * @param {string} ip
- * @returns {boolean}
- */
-function isThrottled(ip) {
-  const expiry = throttled.get(ip);
-  if (!expiry) return false;
-  if (expiry <= nowMs()) {
-    throttled.delete(ip);
-    return false;
-  }
-  return true;
+function isThrottled(userId, ip) {
+  if (!userId) return false;
+  return throttled.has(scope(userId, ip));
 }
 
-/**
- * Record a request for a throttled IP and determine if it should be blocked.
- * @param {string} ip
- * @returns {boolean}  true if should return 429
- */
-function shouldReject(ip) {
-  const settings = settingsService.getSettings();
-  const key = throttleKey(ip);
+function clearThrottle(userId, ip) {
+  if (!userId) return;
+  throttled.delete(scope(userId, ip));
+}
+
+function shouldReject(userId, ip, endpoint) {
+  if (!userId) return false;
+
+  const settings = settingsService.getSettings(userId);
+  const key = throttleKey(userId, ip, endpoint);
+
   sw.record(key);
   const count = sw.count(key, settings.slidingWindowSeconds * 1000);
+
   return count > settings.rateLimitThreshold;
 }
 
 module.exports = {
   throttleIp,
   isThrottled,
+  clearThrottle,
   shouldReject,
 };

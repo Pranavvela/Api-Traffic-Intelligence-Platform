@@ -21,8 +21,8 @@ export default function Settings() {
     setLoading(true);
     try {
       const res = await fetchSettings();
-      if (res.data) {
-        setForm(res.data);
+      if (res) {
+        setForm(res);
       }
       setError('');
     } catch (err) {
@@ -56,8 +56,8 @@ export default function Settings() {
         autoBlockEnabled: Boolean(form.autoBlockEnabled),
       };
       const res = await updateSettings(payload);
-      if (res.data) {
-        setForm(res.data);
+      if (res) {
+        setForm(res);
       }
       setMessage('Settings updated successfully.');
     } catch (err) {
@@ -78,7 +78,7 @@ export default function Settings() {
     setError('');
     try {
       const res = await resetAlerts();
-      setMessage(res.message || 'All alerts cleared.');
+      setMessage(res?.data?.message || res?.message || 'All alerts cleared.');
     } catch (err) {
       setError(err.response?.data?.message || err.message || 'Failed to clear alerts.');
     } finally {
@@ -87,116 +87,74 @@ export default function Settings() {
   }
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1 className="page-title">Settings</h1>
-        <p className="page-subtitle">Configure detection thresholds and mitigation behavior.</p>
+    <div className="space-y-6">
+      <div>
+        <div className="text-xs uppercase tracking-[0.3em] text-sky-300/80">Settings</div>
+        <h1 className="mt-2 text-3xl font-semibold text-white">Detection Controls</h1>
+        <p className="mt-2 text-sm text-slate-300">Tune thresholds and mitigation behavior.</p>
       </div>
 
-      <div className="page-card">
-        <form className="form-grid settings-grid" onSubmit={handleSubmit}>
-          <div className="form-field">
-            <label className="form-label">Rate Limit Threshold</label>
-            <input
-              className="form-input"
-              type="number"
-              min="1"
-              value={form.rateLimitThreshold}
-              onChange={(e) => updateField('rateLimitThreshold', e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label">Brute Force Threshold</label>
-            <input
-              className="form-input"
-              type="number"
-              min="1"
-              value={form.bruteForceThreshold}
-              onChange={(e) => updateField('bruteForceThreshold', e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label">Endpoint Flood Threshold</label>
-            <input
-              className="form-input"
-              type="number"
-              min="1"
-              value={form.endpointFloodThreshold}
-              onChange={(e) => updateField('endpointFloodThreshold', e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label">Burst Multiplier</label>
-            <input
-              className="form-input"
-              type="number"
-              step="0.1"
-              min="0.1"
-              value={form.burstMultiplier}
-              onChange={(e) => updateField('burstMultiplier', e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label">Sliding Window (seconds)</label>
-            <input
-              className="form-input"
-              type="number"
-              min="10"
-              value={form.slidingWindowSeconds}
-              onChange={(e) => updateField('slidingWindowSeconds', e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label">Throttle Duration (minutes)</label>
-            <input
-              className="form-input"
-              type="number"
-              min="1"
-              value={form.throttleDurationMinutes}
-              onChange={(e) => updateField('throttleDurationMinutes', e.target.value)}
-              required
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label">Auto Block Enabled</label>
-            <label className="toggle">
+      <section className="glass-panel rounded-2xl p-6">
+        <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" onSubmit={handleSubmit}>
+          {[
+            ['Rate Limit Threshold', 'rateLimitThreshold'],
+            ['Brute Force Threshold', 'bruteForceThreshold'],
+            ['Endpoint Flood Threshold', 'endpointFloodThreshold'],
+            ['Burst Multiplier', 'burstMultiplier', '0.1'],
+            ['Sliding Window (seconds)', 'slidingWindowSeconds'],
+            ['Throttle Duration (minutes)', 'throttleDurationMinutes'],
+          ].map(([label, key, step]) => (
+            <div key={key} className="space-y-2">
+              <label className="text-xs uppercase tracking-[0.2em] text-slate-400">{label}</label>
+              <input
+                className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white focus:border-sky-400 focus:outline-none"
+                type="number"
+                min="1"
+                step={step || '1'}
+                value={form[key]}
+                onChange={(e) => updateField(key, e.target.value)}
+                required
+              />
+            </div>
+          ))}
+
+          <div className="space-y-2">
+            <label className="text-xs uppercase tracking-[0.2em] text-slate-400">Auto Block Enabled</label>
+            <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
               <input
                 type="checkbox"
                 checked={Boolean(form.autoBlockEnabled)}
                 onChange={(e) => updateField('autoBlockEnabled', e.target.checked)}
+                className="h-4 w-4 accent-sky-400"
               />
-              <span className="toggle-slider" />
-              <span className="toggle-label">
-                {form.autoBlockEnabled ? 'Enabled' : 'Disabled'}
-              </span>
+              {form.autoBlockEnabled ? 'Enabled' : 'Disabled'}
             </label>
           </div>
-          <div className="form-actions">
-            <button className="btn-primary" type="submit" disabled={saving}>
+
+          <div className="md:col-span-2 xl:col-span-3">
+            <button className="rounded-xl bg-sky-500/90 px-5 py-2 text-sm font-semibold text-white shadow-glow transition-all hover:-translate-y-[1px]" type="submit" disabled={saving}>
               {saving ? 'Saving...' : 'Save Settings'}
             </button>
           </div>
         </form>
 
-        {loading && <div className="muted">Loading settings...</div>}
-        {message && <div className="form-success">{message}</div>}
-        {error && <div className="form-error">{error}</div>}
-      </div>
+        {loading && <div className="mt-3 text-xs text-slate-400">Loading settings...</div>}
+        {message && <div className="mt-3 text-sm text-emerald-300">{message}</div>}
+        {error && <div className="mt-3 text-sm text-rose-300">{error}</div>}
+      </section>
 
-      <div className="page-card" style={{ marginTop: 16 }}>
-        <h2 className="section-title">Danger Zone</h2>
-        <p className="page-subtitle" style={{ marginBottom: 12 }}>
-          Clear all alerts and reset the threat timeline.
-        </p>
-        <button className="btn-danger" type="button" onClick={handleResetAlerts} disabled={resetting}>
+      <section className="glass-panel rounded-2xl p-6">
+        <div className="text-lg font-semibold text-white">Danger Zone</div>
+        <p className="mt-2 text-sm text-slate-400">Clear all alerts and reset the threat timeline.</p>
+        <button
+          className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/20 px-5 py-2 text-sm font-semibold text-rose-200 transition-all hover:-translate-y-[1px]"
+          type="button"
+          onClick={handleResetAlerts}
+          disabled={resetting}
+        >
           {resetting ? 'Clearing...' : 'Reset Alerts'}
         </button>
-      </div>
+      </section>
     </div>
   );
 }

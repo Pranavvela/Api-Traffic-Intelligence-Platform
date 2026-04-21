@@ -6,12 +6,13 @@ const { getAlertSummary, getRuleBreakdown, getTimeline } = require('../models/th
 
 async function getSummary(req, res, next) {
   try {
-    const windowMs = parseInt(req.query.windowMs, 10) || 3_600_000;
-    const limit = Math.min(parseInt(req.query.limit, 10) || 5, 20);
+    const windowMs = Number.parseInt(req.query.windowMs, 10) || 3_600_000;
+    const limit = Math.min(Number.parseInt(req.query.limit, 10) || 5, 20);
+    const userId = req.user?.id || null;
 
     const [summary, topAttackers] = await Promise.all([
-      getAlertSummary(windowMs),
-      getTopAttackers(windowMs, limit),
+      getAlertSummary(windowMs, userId),
+      getTopAttackers(windowMs, limit, userId),
     ]);
 
     let mlTopIps = [];
@@ -51,8 +52,8 @@ async function getSummary(req, res, next) {
 
 async function getRules(req, res, next) {
   try {
-    const windowMs = parseInt(req.query.windowMs, 10) || 3_600_000;
-    const data = await getRuleBreakdown(windowMs);
+    const windowMs = Number.parseInt(req.query.windowMs, 10) || 3_600_000;
+    const data = await getRuleBreakdown(windowMs, req.user?.id || null);
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -61,9 +62,9 @@ async function getRules(req, res, next) {
 
 async function getTimelineHandler(req, res, next) {
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const limit = Math.min(Number.parseInt(req.query.limit, 10) || 100, 500);
     const source = req.query.source ? String(req.query.source).toUpperCase() : null;
-    const data = await getTimeline(limit, source);
+    const data = await getTimeline(limit, req.user?.id || null, source);
     res.json({ success: true, count: data.length, data });
   } catch (err) {
     next(err);

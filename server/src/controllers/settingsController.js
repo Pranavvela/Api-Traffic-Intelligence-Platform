@@ -10,7 +10,7 @@ function parseBool(value) {
 
 function parsePositiveInt(value, field) {
   if (value === undefined || value === null || value === '') return undefined;
-  const parsed = parseInt(value, 10);
+  const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${field} must be a positive integer.`);
   }
@@ -28,7 +28,8 @@ function parsePositiveNumber(value, field) {
 
 async function getSettings(req, res, next) {
   try {
-    const data = settingsService.getSettings();
+    const userId = req.user?.id || null;
+    const data = await settingsService.loadSettings(userId);
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -57,7 +58,7 @@ async function updateSettings(req, res, next) {
       return res.status(400).json({ success: false, message: 'No settings provided.' });
     }
 
-    const data = await settingsService.updateSettings(partial);
+    const data = await settingsService.updateSettings(req.user?.id || null, partial);
     res.json({ success: true, data });
   } catch (err) {
     next(err);

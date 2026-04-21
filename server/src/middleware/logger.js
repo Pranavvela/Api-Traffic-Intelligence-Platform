@@ -5,72 +5,49 @@ const { insertLog } = require('../models/logModel');
 const detectionService = require('../services/detectionService');
 const blocklist = require('../services/blocklistService');
 const throttling = require('../services/throttlingService');
+const config = require('../config/config');
+const logger = require('../utils/logger');
 
-// These internal monitoring routes must NOT log themselves — doing so creates
-// an infinite feedback loop where dashboard polling floods the database.
 const EXCLUDED_PREFIXES = ['/api/logs', '/api/alerts', '/api/stats', '/api/block-ip', '/health'];
 
-/**
- * Express middleware that:
- *  1. Attaches a unique request ID to each request.
- *  2. Records response timing.
- *  3. Persists the log entry to PostgreSQL after the response is sent.
- *  4. Triggers the detection pipeline asynchronously.
- *
- * Monitoring routes (/api/logs, /api/alerts, /api/stats, /health) are excluded
- * to prevent self-referential logging.
- */
+function isInternalRoute(path) {
+  const prefixes = config.allowlist.internalPrefixes || [];
+  return prefixes.some((prefix) => path.startsWith(prefix));
+}
+
 function requestLogger(req, res, next) {
   const isExcluded = EXCLUDED_PREFIXES.some((prefix) => req.path.startsWith(prefix));
   if (isExcluded) return next();
 
   const ip = normaliseIp(req);
 
-  // ── IP blocking check ─────────────────────────────────────────────────────
-  if (blocklist.isBlocked(ip)) {
-    // Log the blocked attempt then deny.
-    const blockedEntry = {
-      requestId: uuidv4(),
-      ip,
-      method: req.method,
-      endpoint: req.path,
-      statusCode: 403,
-      responseMs: 0,
-      userAgent: req.headers['user-agent'] || null,
-      alertTriggered: false,
-      isBlocked: true,
-      timestamp: new Date().toISOString(),
-    };
-    insertLog(blockedEntry).catch((err) =>
-      console.error('[Logger] Failed to log blocked request:', err.message)
-    );
-    return res.status(403).json({ success: false, message: 'Your IP has been blocked.' });
+  const isProxyRequest = req.originalUrl.startsWith('/proxy');
+  const isApiRequest = req.originalUrl.startsWith('/api');
+  const isInternal = isInternalRoute(req.path);
+
+  const userId = req.user?.id || null;
+
+  // 🔥 Skip completely unrelated routes
+  if (!isProxyRequest && !isApiRequest) return next();
+
+  // ── BLOCKING (ONLY FOR PROXY TRAFFIC) ─────────────────────────────
+  if (isProxyRequest && !isInternal && blocklist.isBlocked(userId, ip)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Your IP has been blocked.',
+      code: 'BLOCKED_IP',
+    });
   }
 
-  // ── Throttling check ─────────────────────────────────────────────────────
-  if (throttling.isThrottled(ip)) {
-    const shouldReject = throttling.shouldReject(ip);
+  // ── THROTTLING (ONLY FOR PROXY TRAFFIC) ───────────────────────────
+  if (isProxyRequest && !isInternal && throttling.isThrottled(userId, ip)) {
+    const shouldReject = throttling.shouldReject(userId, ip, req.originalUrl);
+
     if (shouldReject) {
-      const throttledEntry = {
-        requestId: uuidv4(),
-        ip,
-        method: req.method,
-        endpoint: req.path,
-        statusCode: 429,
-        responseMs: 0,
-        userAgent: req.headers['user-agent'] || null,
-        alertTriggered: false,
-        isBlocked: false,
-        timestamp: new Date().toISOString(),
-      };
-
-      insertLog(throttledEntry).catch((err) =>
-        console.error('[Logger] Failed to log throttled request:', err.message)
-      );
-
       return res.status(429).json({
         success: false,
         message: 'Too many requests. Please try again later.',
+        code: 'RATE_LIMITED',
       });
     }
   }
@@ -79,17 +56,16 @@ function requestLogger(req, res, next) {
   const startTime = Date.now();
 
   req.requestId = requestId;
-  req.requestStartTime = startTime;
 
-  // Capture the response finish event so we have the final status code.
   res.on('finish', async () => {
     const responseMs = Date.now() - startTime;
 
     const logEntry = {
       requestId,
+      userId,
       ip,
       method: req.method,
-      endpoint: req.path,
+      endpoint: req.originalUrl,
       statusCode: res.statusCode,
       responseMs,
       userAgent: req.headers['user-agent'] || null,
@@ -100,12 +76,16 @@ function requestLogger(req, res, next) {
 
     try {
       const savedLog = await insertLog(logEntry);
-      // Fire detection asynchronously — do NOT await here to avoid blocking the event loop.
-      detectionService.analyse(logEntry, savedLog).catch((err) => {
-        console.error('[Logger] Detection error:', err.message);
-      });
+
+      // 🔥 RUN DETECTION FOR BOTH API + PROXY
+      if (isProxyRequest || isApiRequest) {
+        detectionService.analyse(logEntry, savedLog).catch((err) => {
+          logger.error('Detection error', { error: err.message, ip: logEntry.ip });
+        });
+      }
+
     } catch (err) {
-      console.error('[Logger] Failed to persist log:', err.message);
+      logger.error('Failed to persist log', { error: err.message, ip: logEntry.ip });
     }
   });
 
@@ -113,16 +93,40 @@ function requestLogger(req, res, next) {
 }
 
 /**
- * Resolve the real client IP, respecting common proxy headers.
- * @param {import('express').Request} req
- * @returns {string}
+ * Normalize IP address
  */
 function normaliseIp(req) {
+  const simulatorFlag = String(req.headers['x-simulator-traffic'] || '').toLowerCase() === 'true';
+  const simulatorIpHeader = String(req.headers['x-simulator-ip'] || '').trim();
   const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) {
-    return forwarded.split(',')[0].trim();
+
+  let ip = forwarded
+    ? forwarded.split(',')[0].trim()
+    : req.socket?.remoteAddress || req.ip || '0.0.0.0';
+
+  // 🔥 Simulator handling
+  if (simulatorFlag) {
+    const fromHeader = simulatorIpHeader || ip;
+
+    const isLocal =
+      fromHeader === '127.0.0.1' ||
+      fromHeader === '::1' ||
+      fromHeader.startsWith('::ffff:127.0.0.1');
+
+    if (isLocal) return '198.18.0.10';
+
+    if (fromHeader.startsWith('::ffff:')) {
+      return fromHeader.replace('::ffff:', '');
+    }
+
+    return fromHeader;
   }
-  return req.socket?.remoteAddress || req.ip || '0.0.0.0';
+
+  // Normal normalization
+  if (ip === '::1') return '127.0.0.1';
+  if (ip.startsWith('::ffff:')) return ip.replace('::ffff:', '');
+
+  return ip;
 }
 
 module.exports = requestLogger;

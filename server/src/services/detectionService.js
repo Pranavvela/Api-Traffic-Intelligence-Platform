@@ -2,119 +2,171 @@
 
 const sw = require('./slidingWindowService');
 const { evaluateAll } = require('./ruleEngine');
-const { insertAlert, findRecentDuplicate, incrementAlertCount } = require('../models/alertModel');
+const {
+  insertAlert,
+  findActiveGroup,
+  updateAlertAggregation,
+  updateAlertState,
+  autoResolveAlert,
+} = require('../models/alertModel');
 const { markAlertTriggered } = require('../models/logModel');
 const mlService = require('./mlService');
+const featureCacheService = require('./featureCacheService');
+const settingsService = require('./settingsService');
+const throttlingService = require('./throttlingService');
+const blocklistService = require('./blocklistService');
+const { createTtlStore } = require('./store');
+const logger = require('../utils/logger');
 
-/**
- * Process a single log entry through the full detection pipeline.
- *
- * Steps:
- *  1. Update sliding-window counters for this request.
- *  2. Run all rule evaluations.
- *  3. Persist any violations as alerts.
- *
- * This function is intentionally decoupled from the HTTP layer so that
- * it can later be replaced with or augmented by an ML inference step
- * without touching any route or controller code.
- *
- * @param {Object} logEntry  Raw log data (pre-persist)
- * @param {Object} savedLog  Persisted row returned by logModel.insertLog
- */
+const offenseStore = createTtlStore();
+const suspicionStore = createTtlStore();
+
+function actorKey(userId, ip) {
+  return `${userId || 'anonymous'}:${ip}`;
+}
+
+// 🔥 FIXED ESCALATION LOGIC
+async function applyProgressiveEscalation({
+  userId,
+  ip,
+  topSeverity,
+  suspicionScore,
+  repeatCount,
+  settings,
+  isMlAnomaly,
+}) {
+  const blockThreshold = settings.blockScoreThreshold || 250;
+  const throttleThreshold = settings.throttleScoreThreshold || 120;
+
+  const repeatBlockThreshold = 8;
+  const repeatThrottleThreshold = 4;
+
+  const isCritical = topSeverity === 'critical';
+  const isHigh = topSeverity === 'high';
+
+  // 🔴 BLOCK (VERY STRICT)
+  if (
+    settings.autoBlockEnabled &&
+    (
+      suspicionScore > blockThreshold ||
+      (isCritical && repeatCount >= repeatBlockThreshold) ||
+      (isMlAnomaly && repeatCount >= repeatBlockThreshold + 2)
+    )
+  ) {
+    await blocklistService.blockIp(userId, ip, 'High confidence attack');
+    return 'BLOCKED';
+  }
+
+  // 🟡 THROTTLE FIRST
+  if (
+    suspicionScore > throttleThreshold ||
+    repeatCount >= repeatThrottleThreshold ||
+    isHigh
+  ) {
+    throttlingService.throttleIp(userId, ip);
+    return 'THROTTLED';
+  }
+
+  return 'NONE';
+}
+
 async function analyse(logEntry, savedLog) {
   const { ip, endpoint, statusCode } = logEntry;
+  const userId = logEntry.userId || null;
+  const settings = settingsService.getSettings(userId);
 
-  // ── Step 1: Update sliding window counters ────────────────────────────────
-  const rateKey = sw.rateKey(ip, endpoint);
-  sw.record(rateKey);
+  const tracker = actorKey(userId, ip);
 
-  // Track per-IP total burst (for BURST_TRAFFIC rule).
-  sw.record(sw.ipBurstKey(ip));
+  // 🔥 FIX: allow BOTH api + proxy
+  const isProxy = endpoint.startsWith('/proxy');
+  const isApi = endpoint.startsWith('/api');
 
-  // Track login failures separately for REPEATED_LOGIN_FAILURE rule.
-  const isLoginEndpoint = /\/login/i.test(endpoint);
+  if (!isProxy && !isApi) return;
+
+  // ── Sliding window tracking ──
+  sw.record(sw.rateKey(tracker, endpoint));
+  sw.record(sw.ipBurstKey(tracker));
+
+  const isLogin = /login/i.test(endpoint);
   const isFailure = [400, 401, 403].includes(statusCode);
-  if (isLoginEndpoint && isFailure) {
-    sw.record(sw.loginFailKey(ip));
+
+  if (isLogin && isFailure) {
+    sw.record(sw.loginFailKey(tracker));
   }
 
-  // ── Step 2: Evaluate rules ────────────────────────────────────────────────
-  const violations = evaluateAll(logEntry);
+  featureCacheService.updateFromLog(logEntry, savedLog);
 
+  // ── RULE DETECTION ──
+  const violations = evaluateAll({ ...logEntry, _trackerIp: tracker });
+
+  // ── ML DETECTION ──
   let mlSignal = null;
   try {
-    mlSignal = await mlService.scoreIpWindow(ip);
-  } catch (err) {
-    console.error('[DetectionService] ML scoring failed:', err.message);
+    mlSignal = await mlService.scoreIpWindow(ip, userId);
+  } catch (e) {
+    logger.warn('ML failed', { error: e.message });
   }
 
-  const shouldRaiseMl = mlSignal && mlSignal.ml_label === 'ANOMALY';
+  const isMlAnomaly = mlSignal?.ml_label === 'ANOMALY';
 
-  if (violations.length === 0 && !shouldRaiseMl) return;
+  if (!violations.length && !isMlAnomaly) return;
 
+  // 🔥 SLOW DOWN SCORE BUILDUP
+  const suspicionIncrement =
+    violations.length * 10 + (isMlAnomaly ? 20 : 0);
+
+  const suspicionScore =
+    (suspicionStore.get(tracker) || 0) + suspicionIncrement;
+
+  suspicionStore.set(tracker, suspicionScore, 60000);
+
+  const repeatCount = (offenseStore.get(tracker) || 0) + 1;
+  offenseStore.set(tracker, repeatCount, 60000);
+
+  const topSeverity = violations.length ? 'high' : 'medium';
+
+  // ── Mark log
   if (savedLog?.request_id) {
-    markAlertTriggered(savedLog.request_id).catch((err) => {
-      console.error('[DetectionService] Failed to mark alert_triggered:', err.message);
+    markAlertTriggered(savedLog.request_id).catch(() => {});
+  }
+
+  // ── ALERT STORAGE ──
+  for (const v of violations) {
+    await insertAlert({
+      requestId: savedLog?.request_id,
+      userId,
+      ruleTriggered: v.ruleId,
+      ip,
+      endpoint,
+      reason: v.reason,
+      severity: v.severity,
+      source: 'RULE',
     });
   }
 
-  // ── Step 3: Persist alerts with deduplication ────────────────────────────
-  const DEDUP_WINDOW_MS = 30_000;
-
-  const persistPromises = violations.map(async (v) => {
-    try {
-      const existing = await findRecentDuplicate(ip, endpoint, v.ruleId, DEDUP_WINDOW_MS);
-      if (existing) {
-        await incrementAlertCount(existing.id);
-        console.log(`[DetectionService] Dedup: incremented alert #${existing.id} (${v.ruleId}).`);
-      } else {
-        await insertAlert({
-          requestId: savedLog?.request_id || null,
-          ruleTriggered: v.ruleId,
-          ip,
-          endpoint,
-          reason: v.reason,
-          severity: v.severity,
-          source: 'RULE',
-        });
-      }
-    } catch (err) {
-      console.error(`[DetectionService] Failed to persist alert (${v.ruleId}):`, err.message);
-    }
-  });
-
-  if (shouldRaiseMl) {
-    persistPromises.push((async () => {
-      const ruleId = 'ML_ANOMALY';
-      try {
-        const existing = await findRecentDuplicate(ip, endpoint, ruleId, DEDUP_WINDOW_MS);
-        if (existing) {
-          await incrementAlertCount(existing.id);
-        } else {
-          await insertAlert({
-            requestId: savedLog?.request_id || null,
-            ruleTriggered: ruleId,
-            ip,
-            endpoint,
-            reason: `ML anomaly score ${mlSignal.anomaly_score} >= ${mlSignal.threshold}`,
-            severity: 'medium',
-            source: 'ML',
-            anomalyScore: mlSignal.anomaly_score,
-            mlExplainability: mlSignal.explainability || null,
-            mlLabel: mlSignal.ml_label,
-          });
-        }
-      } catch (err) {
-        console.error('[DetectionService] Failed to persist ML alert:', err.message);
-      }
-    })());
+  if (isMlAnomaly) {
+    await insertAlert({
+      requestId: savedLog?.request_id,
+      userId,
+      ruleTriggered: 'ML_ANOMALY',
+      ip,
+      endpoint,
+      reason: `ML anomaly score ${mlSignal.anomaly_score}`,
+      severity: 'medium',
+      source: 'ML',
+    });
   }
 
-  await Promise.all(persistPromises);
-
-  console.log(
-    `[DetectionService] ${violations.length} violation(s) processed from IP ${ip} on ${endpoint}.`
-  );
+  // ── ESCALATION ──
+  await applyProgressiveEscalation({
+    userId,
+    ip,
+    topSeverity,
+    suspicionScore,
+    repeatCount,
+    settings,
+    isMlAnomaly,
+  });
 }
 
 module.exports = { analyse };

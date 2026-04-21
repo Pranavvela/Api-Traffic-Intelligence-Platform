@@ -5,6 +5,11 @@ const { getSummary, getRules, getTimelineHandler } = require('../controllers/thr
 
 const router = Router();
 
+// Short-path compatibility endpoints used by the frontend
+router.get('/threat-summary', getSummary);
+router.get('/threat-rules', getRules);
+router.get('/threat-timeline', getTimelineHandler);
+
 // GET /api/threat-analysis/summary
 router.get('/threat-analysis/summary', getSummary);
 

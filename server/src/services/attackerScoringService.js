@@ -1,3 +1,4 @@
+// attackerScoringService.js - Logic for computing attacker scores based on triggered alerts, severity, and frequency.
 'use strict';
 
 const { query } = require('../config/db');
@@ -35,8 +36,12 @@ const RULE_WEIGHTS = {
  * @param {number} [limit=10]          Top N attackers to return.
  * @returns {Promise<Object[]>}
  */
-async function getTopAttackers(windowMs = 3_600_000, limit = 10) {
+async function getTopAttackers(windowMs = 3_600_000, limit = 10, userId = null) {
+  if (!userId) return [];
+
   const since = new Date(Date.now() - windowMs).toISOString();
+  const params = [since, limit, userId];
+  const clauses = ['timestamp >= $1', 'user_id = $3'];
 
   const result = await query(
     `SELECT
@@ -47,11 +52,11 @@ async function getTopAttackers(windowMs = 3_600_000, limit = 10) {
        array_agg(DISTINCT severity)         AS severities,
        MAX(timestamp)                       AS last_seen
      FROM alerts
-     WHERE timestamp >= $1
+     WHERE ${clauses.join(' AND ')}
      GROUP BY ip
      ORDER BY alert_count DESC
      LIMIT $2`,
-    [since, limit]
+    params
   );
 
   // Enrich with computed score.

@@ -9,13 +9,31 @@ const { query } = require('../config/db');
  * @param {string} [reason]
  * @returns {Promise<Object>}
  */
-async function addBlockedIp(ip, reason) {
+async function addBlockedIp(userId, ip, reason) {
+  if (!userId) return null;
+
+  await query(
+    `UPDATE blocked_ips
+     SET reason = $3,
+         blocked_at = NOW()
+     WHERE user_id = $1 AND ip = $2`,
+    [userId, ip, reason || null]
+  );
+
+  const existing = await query(
+    `SELECT * FROM blocked_ips WHERE user_id = $1 AND ip = $2 LIMIT 1`,
+    [userId, ip]
+  );
+
+  if (existing.rows[0]) {
+    return existing.rows[0];
+  }
+
   const result = await query(
-    `INSERT INTO blocked_ips (ip, reason)
-     VALUES ($1, $2)
-     ON CONFLICT (ip) DO UPDATE SET reason = EXCLUDED.reason, blocked_at = NOW()
+    `INSERT INTO blocked_ips (user_id, ip, reason)
+     VALUES ($1, $2, $3)
      RETURNING *`,
-    [ip, reason || null]
+    [userId, ip, reason || null]
   );
   return result.rows[0];
 }
@@ -25,8 +43,9 @@ async function addBlockedIp(ip, reason) {
  * @param {string} ip
  * @returns {Promise<boolean>}
  */
-async function removeBlockedIp(ip) {
-  await query(`DELETE FROM blocked_ips WHERE ip = $1`, [ip]);
+async function removeBlockedIp(userId, ip) {
+  if (!userId) return false;
+  await query(`DELETE FROM blocked_ips WHERE user_id = $1 AND ip = $2`, [userId, ip]);
   return true;
 }
 
@@ -34,9 +53,12 @@ async function removeBlockedIp(ip) {
  * Fetch all blocked IPs.
  * @returns {Promise<Object[]>}
  */
-async function getAllBlockedIps() {
+async function getAllBlockedIps(userId) {
+  if (!userId) return [];
+
   const result = await query(
-    `SELECT * FROM blocked_ips ORDER BY blocked_at DESC`
+    `SELECT * FROM blocked_ips WHERE user_id = $1 ORDER BY blocked_at DESC`,
+    [userId]
   );
   return result.rows;
 }

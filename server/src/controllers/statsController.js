@@ -1,6 +1,12 @@
 'use strict';
 
-const { getEndpointStats, getTopIps, countRequestsInLastWindow, getTrafficByMinute } = require('../models/logModel');
+const {
+  getEndpointStats,
+  getTopIps,
+  countRequestsInLastWindow,
+  getTrafficByMinute,
+  getTrafficByBucket,
+} = require('../models/logModel');
 const { countUnresolved } = require('../models/alertModel');
 const { getTopAttackers } = require('../services/attackerScoringService');
 
@@ -10,16 +16,17 @@ const { getTopAttackers } = require('../services/attackerScoringService');
  */
 async function getSummary(req, res, next) {
   try {
-    const windowMs = parseInt(req.query.windowMs, 10) || 60_000;
-    const rpmWindowMs = parseInt(req.query.rpmWindowMs, 10) || 300_000;
+    const windowMs = Number.parseInt(req.query.windowMs, 10) || 60_000;
+    const rpmWindowMs = Number.parseInt(req.query.rpmWindowMs, 10) || 300_000;
+    const userId = req.user?.id || null;
 
     const [requestCount, rpmCount, unresolvedAlerts, topIps, endpointStats, topAttackers] = await Promise.all([
-      countRequestsInLastWindow(windowMs),
-      countRequestsInLastWindow(rpmWindowMs),
-      countUnresolved(),
-      getTopIps(windowMs, 10),
-      getEndpointStats(windowMs),
-      getTopAttackers(windowMs, 5),
+      countRequestsInLastWindow(windowMs, userId),
+      countRequestsInLastWindow(rpmWindowMs, userId),
+      countUnresolved(userId),
+      getTopIps(windowMs, 10, userId),
+      getEndpointStats(windowMs, userId),
+      getTopAttackers(windowMs, 5, userId),
     ]);
 
     const requestsPerMinute = Math.round((rpmCount / rpmWindowMs) * 60_000);
@@ -48,9 +55,9 @@ async function getSummary(req, res, next) {
  */
 async function getTopIpsHandler(req, res, next) {
   try {
-    const windowMs = parseInt(req.query.windowMs, 10) || 60_000;
-    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
-    const data = await getTopIps(windowMs, limit);
+    const windowMs = Number.parseInt(req.query.windowMs, 10) || 60_000;
+    const limit = Math.min(Number.parseInt(req.query.limit, 10) || 10, 50);
+    const data = await getTopIps(windowMs, limit, req.user?.id || null);
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -63,8 +70,8 @@ async function getTopIpsHandler(req, res, next) {
  */
 async function getEndpointStatsHandler(req, res, next) {
   try {
-    const windowMs = parseInt(req.query.windowMs, 10) || 60_000;
-    const data = await getEndpointStats(windowMs);
+    const windowMs = Number.parseInt(req.query.windowMs, 10) || 60_000;
+    const data = await getEndpointStats(windowMs, req.user?.id || null);
     res.json({ success: true, data });
   } catch (err) {
     next(err);
@@ -77,9 +84,27 @@ async function getEndpointStatsHandler(req, res, next) {
  */
 async function getTrafficGraphHandler(req, res, next) {
   try {
-    const minutes = Math.min(parseInt(req.query.minutes, 10) || 5, 60);
-    const data = await getTrafficByMinute(minutes);
-    res.json({ success: true, data });
+    const range = (req.query.range || '').toLowerCase();
+    const ranges = {
+      '5m': { windowMs: 5 * 60_000, bucketSeconds: 60 },
+      '1h': { windowMs: 60 * 60_000, bucketSeconds: 5 * 60 },
+      '12h': { windowMs: 12 * 60 * 60_000, bucketSeconds: 15 * 60 },
+      '24h': { windowMs: 24 * 60 * 60_000, bucketSeconds: 30 * 60 },
+      '7d': { windowMs: 7 * 24 * 60 * 60_000, bucketSeconds: 60 * 60 },
+      '1m': { windowMs: 30 * 24 * 60 * 60_000, bucketSeconds: 6 * 60 * 60 },
+      '1y': { windowMs: 365 * 24 * 60 * 60_000, bucketSeconds: 24 * 60 * 60 },
+    };
+
+    if (ranges[range]) {
+      const { windowMs, bucketSeconds } = ranges[range];
+      const data = await getTrafficByBucket(windowMs, bucketSeconds, req.user?.id || null);
+      res.json({ success: true, data, meta: { range, windowMs, bucketSeconds } });
+      return;
+    }
+
+    const minutes = Math.min(Number.parseInt(req.query.minutes, 10) || 5, 60);
+    const data = await getTrafficByMinute(minutes, req.user?.id || null);
+    res.json({ success: true, data, meta: { range: '5m', windowMs: minutes * 60_000, bucketSeconds: 60 } });
   } catch (err) {
     next(err);
   }
@@ -91,9 +116,9 @@ async function getTrafficGraphHandler(req, res, next) {
  */
 async function getAttackersHandler(req, res, next) {
   try {
-    const windowMs = parseInt(req.query.windowMs, 10) || 3_600_000;
-    const limit    = Math.min(parseInt(req.query.limit, 10) || 10, 50);
-    const data     = await getTopAttackers(windowMs, limit);
+    const windowMs = Number.parseInt(req.query.windowMs, 10) || 3_600_000;
+    const limit    = Math.min(Number.parseInt(req.query.limit, 10) || 10, 50);
+    const data     = await getTopAttackers(windowMs, limit, req.user?.id || null);
     res.json({ success: true, data });
   } catch (err) {
     next(err);

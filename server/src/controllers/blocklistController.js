@@ -8,11 +8,12 @@ const { blockIp, unblockIp, listBlockedIps } = require('../services/blocklistSer
  */
 async function blockIpHandler(req, res, next) {
   try {
+    const userId = req.user?.id || null;
     const { ip, reason } = req.body;
     if (!ip || typeof ip !== 'string') {
       return res.status(400).json({ success: false, message: 'ip is required.' });
     }
-    const row = await blockIp(ip.trim(), reason || `Manually blocked via dashboard.`);
+    const row = await blockIp(userId, ip.trim(), reason || `Manually blocked via dashboard.`);
     res.status(201).json({ success: true, data: row });
   } catch (err) {
     next(err);
@@ -25,8 +26,9 @@ async function blockIpHandler(req, res, next) {
  */
 async function unblockIpHandler(req, res, next) {
   try {
+    const userId = req.user?.id || null;
     const ip = decodeURIComponent(req.params.ip);
-    await unblockIp(ip);
+    await unblockIp(userId, ip);
     res.json({ success: true, message: `IP ${ip} unblocked.` });
   } catch (err) {
     next(err);
@@ -39,11 +41,12 @@ async function unblockIpHandler(req, res, next) {
  */
 async function unblockIpBodyHandler(req, res, next) {
   try {
+    const userId = req.user?.id || null;
     const { ip } = req.body;
     if (!ip || typeof ip !== 'string') {
       return res.status(400).json({ success: false, message: 'ip is required.' });
     }
-    await unblockIp(ip.trim());
+    await unblockIp(userId, ip.trim());
     res.json({ success: true, message: `IP ${ip} unblocked.` });
   } catch (err) {
     next(err);
@@ -56,7 +59,7 @@ async function unblockIpBodyHandler(req, res, next) {
  */
 async function listBlockedIpsHandler(req, res, next) {
   try {
-    const data = await listBlockedIps();
+    const data = await listBlockedIps(req.user?.id || null);
     res.json({ success: true, count: data.length, data });
   } catch (err) {
     next(err);

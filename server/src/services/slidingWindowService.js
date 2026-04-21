@@ -1,7 +1,9 @@
+// slidingWindowService.js - In-memory sliding window implementation for rate-limiting and burst detection.
 'use strict';
 
 const { windowStart } = require('../utils/timeUtils');
 const settingsService = require('./settingsService');
+const { createKvStore } = require('./store');
 
 /**
  * In-memory sliding window store.
@@ -14,7 +16,7 @@ const settingsService = require('./settingsService');
  *   "login_fail:<ip>"
  *   "burst:<ip>:<endpoint>"
  */
-const windowStore = new Map();
+const windowStore = createKvStore();
 
 // Purge stale entries every 2 minutes to prevent unbounded memory growth.
 const PURGE_INTERVAL_MS = 120_000;
@@ -28,10 +30,12 @@ setInterval(() => purgeExpired(), PURGE_INTERVAL_MS).unref();
  */
 function record(key) {
   const now = Date.now();
-  if (!windowStore.has(key)) {
-    windowStore.set(key, []);
+  let timestamps = windowStore.get(key);
+  if (!timestamps) {
+    timestamps = [];
+    windowStore.set(key, timestamps);
   }
-  windowStore.get(key).push(now);
+  timestamps.push(now);
   evict(key);
 }
 
@@ -80,8 +84,8 @@ function currentRate(key, observationMs = 10_000) {
  * @param {number} [observationMs=10000]
  * @returns {number}
  */
-function rollingAvgRate(key, observationMs = 10_000) {
-  const windowMs = settingsService.getSettings().slidingWindowSeconds * 1000;
+function rollingAvgRate(key, observationMs = 10_000, customWindowMs = null) {
+  const windowMs = customWindowMs || (settingsService.getSettings().slidingWindowSeconds * 1000);
   const now = Date.now();
   const windowBoundary = now - windowMs;
   const observationBoundary = now - observationMs;

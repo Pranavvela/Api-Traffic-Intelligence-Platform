@@ -1,212 +1,140 @@
 import axios from 'axios';
+import { getToken, clearToken } from './auth';
 
 const BASE = process.env.REACT_APP_API_URL || '';
 
 const client = axios.create({ baseURL: BASE });
 
-/**
- * Fetch recent API logs.
- * @param {number} limit
- */
-export async function fetchLogs(limit = 100) {
-  const { data } = await client.get(`/api/logs?limit=${limit}`);
-  return data;
-}
+// ───────────── AUTH INTERCEPTORS ─────────────
 
-/**
- * Fetch alerts.
- * @param {boolean} unresolvedOnly
- */
-export async function fetchAlerts(unresolvedOnly = false) {
-  const { data } = await client.get(`/api/alerts?unresolved=${unresolvedOnly}&limit=50`);
-  return data;
-}
+client.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 
-/**
- * Resolve a single alert by ID.
- * @param {number} id
- */
-export async function resolveAlert(id) {
-  const { data } = await client.patch(`/api/alerts/${id}/resolve`);
-  return data;
-}
+client.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err?.response?.status === 401) {
+      clearToken();
+      window.location.assign('/login');
+    }
+    return Promise.reject(err);
+  }
+);
 
-/**
- * Clear all alerts (unresolved + history).
- */
-export async function resetAlerts() {
-  const { data } = await client.post('/api/alerts/reset');
-  return data;
-}
+// 🔥 NORMALIZER (KEY FIX)
+const extract = (res) => {
+  if (!res) return null;
+  if (res.data?.data !== undefined) return res.data.data;
+  return res.data;
+};
 
-/**
- * Fetch dashboard summary stats.
- */
-export async function fetchSummary() {
-  const { data } = await client.get('/api/stats/summary');
-  return data;
-}
+// 🔥 CACHE BUSTER
+const noCache = () => `_=${Date.now()}`;
 
-/**
- * Fetch alert history (resolved alerts).
- * @param {number} limit
- */
-export async function fetchAlertHistory(limit = 100) {
-  const { data } = await client.get(`/api/alerts/history?limit=${limit}`);
-  return data;
-}
+// ───────────── LOGS / STATS ─────────────
 
-/**
- * Block an IP address.
- * @param {string} ip
- * @param {string} [reason]
- */
-export async function blockIp(ip, reason) {
-  const { data } = await client.post('/api/block-ip', { ip, reason });
-  return data;
-}
+export const fetchLogs = async (limit = 100) =>
+  extract(await client.get(`/api/logs?limit=${limit}&${noCache()}`));
 
-/**
- * Unblock an IP address.
- * @param {string} ip
- */
-export async function unblockIp(ip) {
-  const { data } = await client.post('/api/unblock-ip', { ip });
-  return data;
-}
+export const fetchAlerts = async (unresolvedOnly = false) =>
+  extract(await client.get(`/api/alerts?unresolved=${unresolvedOnly}&limit=50&${noCache()}`));
 
-/**
- * Fetch all blocked IPs.
- */
-export async function fetchBlockedIps() {
-  const { data } = await client.get('/api/blocked-ips');
-  return data;
-}
+export const fetchSummary = async () =>
+  extract(await client.get(`/api/stats/summary?${noCache()}`));
 
-/**
- * Fetch traffic graph data (requests per minute, last 5 minutes).
- * @param {number} minutes
- */
-export async function fetchTrafficGraph(minutes = 5) {
-  const { data } = await client.get(`/api/stats/traffic?minutes=${minutes}`);
-  return data;
-}
+export const fetchTrafficGraph = async ({ range = '5m' } = {}) =>
+  extract(await client.get(`/api/stats/traffic?range=${range}&${noCache()}`));
 
-/**
- * Fetch top attacker scores.
- */
-export async function fetchAttackers() {
-  const { data } = await client.get('/api/stats/attackers');
-  return data;
-}
+export const fetchAttackers = async () =>
+  extract(await client.get(`/api/stats/attackers?${noCache()}`));
 
-/**
- * Register a new API endpoint.
- * @param {Object} payload
- */
-export async function registerApi(payload) {
-  const { data } = await client.post('/api/register', payload);
-  return data;
-}
+export const fetchAlertHistory = async (limit = 50) =>
+  extract(await client.get(`/api/alerts/history?limit=${limit}&${noCache()}`));
 
-/**
- * Fetch all registered APIs.
- */
-export async function fetchRegisteredApis() {
-  const { data } = await client.get('/api/list');
-  return data;
-}
+// ───────────── ALERT ACTIONS ─────────────
 
-/**
- * Delete a registered API by id.
- * @param {number} id
- */
-export async function deleteRegisteredApi(id) {
-  const { data } = await client.delete(`/api/${id}`);
-  return data;
-}
+export const resolveAlert = (id) =>
+  client.patch(`/api/alerts/${id}/resolve`);
 
-/**
- * Validate a registered API by id.
- * @param {number} id
- */
-export async function validateRegisteredApi(id) {
-  const { data } = await client.post(`/api/validate/${id}`);
-  return data;
-}
+export const blockIp = (ip) =>
+  client.post(`/api/block-ip`, { ip });
 
-/**
- * Fetch platform settings.
- */
-export async function fetchSettings() {
-  const { data } = await client.get('/api/settings');
-  return data;
-}
+// ───────────── API MANAGEMENT ─────────────
 
-/**
- * Update platform settings.
- * @param {Object} payload
- */
-export async function updateSettings(payload) {
-  const { data } = await client.put('/api/settings', payload);
-  return data;
-}
+export const fetchRegisteredApis = async () =>
+  extract(await client.get(`/api/registered-apis`));
 
-/**
- * Train ML model.
- * @param {Object} payload
- */
-export async function trainMl(payload) {
-  const { data } = await client.post('/ml/train', payload);
-  return data;
-}
+export const registerApi = (data) =>
+  client.post(`/api/registered-apis`, data);
 
-/**
- * Fetch ML detection results.
- * @param {Object} params
- */
-export async function detectMl(params = {}) {
-  const { data } = await client.get('/ml/detect', { params });
-  return data;
-}
+export const deleteRegisteredApi = (id) =>
+  client.delete(`/api/registered-apis/${id}`);
 
-/**
- * Fetch ML model status.
- */
-export async function fetchMlStatus() {
-  const { data } = await client.get('/ml/status');
-  return data;
-}
+export const updateRegisteredApi = (id, data) =>
+  client.patch(`/api/registered-apis/${id}`, data);
 
-/**
- * Export ML dataset.
- * @param {Object} params
- */
-export async function exportMlDataset(params = {}) {
-  const { data } = await client.get('/ml/export', { params });
-  return data;
-}
+export const validateRegisteredApi = (id) =>
+  client.post(`/api/registered-apis/${id}/validate`);
 
-/**
- * Threat analysis summary.
- */
-export async function fetchThreatSummary(params = {}) {
-  const { data } = await client.get('/api/threat-analysis/summary', { params });
-  return data;
-}
+// ───────────── BLOCKED IPS ─────────────
 
-/**
- * Threat analysis rule breakdown.
- */
-export async function fetchThreatRules(params = {}) {
-  const { data } = await client.get('/api/threat-analysis/rules', { params });
-  return data;
-}
+export const fetchBlockedIps = async () =>
+  extract(await client.get(`/api/blocked-ips`));
 
-/**
- * Threat analysis timeline.
- */
-export async function fetchThreatTimeline(params = {}) {
-  const { data } = await client.get('/api/threat-analysis/timeline', { params });
-  return data;
-}
+export const unblockIp = (ip) =>
+  client.post(`/api/unblock-ip`, { ip });
+
+// ───────────── SETTINGS ─────────────
+
+export const fetchSettings = async () =>
+  extract(await client.get(`/api/settings`));
+
+export const updateSettings = (data) =>
+  client.patch(`/api/settings`, data);
+
+export const resetAlerts = () =>
+  client.post(`/api/alerts/reset`);
+
+// ───────────── AUTH ─────────────
+
+// 🔥 IMPORTANT: Ensure correct payload
+export const login = async ({ email, password }) => {
+  const res = await client.post(`/api/login`, { email, password });
+  return extract(res);
+};
+
+export const registerUser = async ({ email, password }) => {
+  const res = await client.post(`/api/register`, { email, password });
+  return extract(res);
+};
+
+// ───────────── ML ─────────────
+
+export const fetchMlStatus = async () =>
+  extract(await client.get(`/ml/status`));
+
+export const fetchMlModels = async () =>
+  extract(await client.get(`/ml/models`));
+
+export const trainMl = () =>
+  client.post(`/ml/train`);
+
+export const detectMl = async () =>
+  extract(await client.get(`/ml/detect`));
+
+export const activateMlModel = (id) =>
+  client.post(`/ml/models/${id}/activate`);
+
+// ───────────── THREAT ANALYSIS ─────────────
+
+export const fetchThreatSummary = async () =>
+  extract(await client.get(`/api/threat-summary`));
+
+export const fetchThreatRules = async () =>
+  extract(await client.get(`/api/threat-rules`));
+
+export const fetchThreatTimeline = async () =>
+  extract(await client.get(`/api/threat-timeline`));

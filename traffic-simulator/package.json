@@ -5,9 +5,17 @@
   "scripts": {
     "normal": "node run.js normal",
     "attack": "node run.js attack",
-    "mixed": "node run.js mixed"
+    "mixed": "node run.js mixed",
+    "normal:safe": "cross-env SAFE_MODE=true ALLOW_WRITE_NORMAL=false ENABLE_RUSH_HOUR=false node run.js normal",
+    "attack:safe": "cross-env SAFE_MODE=true ENABLE_BRUTE_FORCE=true ATTACK_SCALE=2 ATTACK_PACING_MS=80 node run.js attack",
+    "mixed:safe": "cross-env SAFE_MODE=true ALLOW_WRITE_NORMAL=false ENABLE_BRUTE_FORCE=false ENABLE_RUSH_HOUR=false node run.js mixed",
+    "mixed:stress": "cross-env SAFE_MODE=false ALLOW_WRITE_NORMAL=true ENABLE_BRUTE_FORCE=true ATTACK_SCALE=3 ENABLE_RUSH_HOUR=true RUN_DURATION_MS=600000 node run.js mixed"
   },
   "dependencies": {
-    "axios": "^1.6.7"
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
   }
 }

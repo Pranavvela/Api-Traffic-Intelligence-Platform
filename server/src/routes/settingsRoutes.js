@@ -11,4 +11,7 @@ router.get('/settings', getSettings);
 // PUT /api/settings
 router.put('/settings', updateSettings);
 
+// PATCH /api/settings
+router.patch('/settings', updateSettings);
+
 module.exports = router;

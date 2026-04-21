@@ -1,3 +1,4 @@
+// attackTraffic.js - Simulates various attack patterns against registered APIs for testing detection capabilities.
 'use strict';
 
 /**
@@ -12,7 +13,20 @@
  */
 
 const axios = require('axios');
-const { BASE_URL, REQUEST_TIMEOUT_MS } = require('./config');
+const {
+  BASE_URL,
+  REQUEST_TIMEOUT_MS,
+  MAX_IN_FLIGHT,
+  SAFE_MODE,
+  ENABLE_BRUTE_FORCE,
+  ATTACK_SCALE,
+  ATTACK_PACING_MS,
+  EXCLUDED_ENDPOINT_PATTERNS,
+  SIMULATOR_SOURCE,
+  SIMULATOR_IP_FALLBACK,
+  SIM_AUTH_HEADER,
+  SIM_AUTH_TOKEN,
+} = require('./config');
 
 const ATTACK_TYPE = process.env.ATTACK; // optional override
 
@@ -20,11 +34,57 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function createLimiter(limit) {
+  let active = 0;
+  const queue = [];
+
+  async function withLimit(task) {
+    if (active >= limit) {
+      await new Promise((resolve) => queue.push(resolve));
+    }
+
+    active += 1;
+    try {
+      return await task();
+    } finally {
+      active -= 1;
+      const next = queue.shift();
+      if (next) next();
+    }
+  }
+
+  return { withLimit };
+}
+
+function isExcludedEndpoint(endpoint) {
+  const value = String(endpoint || '').toLowerCase();
+  return EXCLUDED_ENDPOINT_PATTERNS.some((pattern) => value.includes(String(pattern).toLowerCase()));
+}
+
+function buildAuthHeaders() {
+  if (!SIM_AUTH_TOKEN) return {};
+  const token = SIM_AUTH_TOKEN.startsWith('Bearer ') ? SIM_AUTH_TOKEN : `Bearer ${SIM_AUTH_TOKEN}`;
+  return { [SIM_AUTH_HEADER]: token };
+}
+
 async function fetchRegisteredApis() {
-  const res = await axios.get(`${BASE_URL}/api/list`, { timeout: REQUEST_TIMEOUT_MS });
+  let res;
+  try {
+    res = await axios.get(`${BASE_URL}/api/list`, {
+      timeout: REQUEST_TIMEOUT_MS,
+      headers: buildAuthHeaders(),
+    });
+  } catch (err) {
+    if (err?.response?.status === 401 || err?.response?.status === 403) {
+      throw new Error('Unauthorized to list registered APIs. Set SIM_AUTH_TOKEN (JWT) in traffic-simulator/.env.');
+    }
+    throw err;
+  }
   const list = res.data?.data || [];
   return list.filter((api) => {
     const type = String(api.api_type || 'INTERNAL').toUpperCase();
+    const endpoint = String(api.endpoint || '');
+    if (isExcludedEndpoint(endpoint)) return false;
     return api.is_active !== false && api.validation_status !== 'INVALID' && type === 'INTERNAL';
   });
 }
@@ -38,17 +98,34 @@ function findLoginEndpoint(apis) {
   return writeApis.find((a) => /login|auth/i.test(a.endpoint)) || writeApis[0] || null;
 }
 
-async function sendRequest(api, opts = {}, summary) {
+function resolveRequestUrl(endpoint) {
+  const raw = String(endpoint || '').trim();
+  if (!raw) return BASE_URL;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/')) return `${BASE_URL}${raw}`;
+  return `${BASE_URL}/${raw}`;
+}
+
+async function sendRequest(api, opts = {}, summary, limiter) {
   const { ip = '10.0.0.1', data, label = '' } = opts;
+  const simulatorIp = ip || SIMULATOR_IP_FALLBACK;
+  const requestUrl = resolveRequestUrl(api.endpoint);
   try {
-    const response = await axios({
+    const response = await limiter.withLimit(() => axios({
       method: api.method,
-      url: `${BASE_URL}${api.endpoint}`,
+      url: requestUrl,
       data,
-      headers: { 'X-Forwarded-For': ip },
+      headers: {
+        'X-Forwarded-For': simulatorIp,
+        'X-Simulator-Traffic': 'true',
+        'X-Simulator-Mode': 'attack',
+        'X-Simulator-Source': SIMULATOR_SOURCE,
+        'X-Simulator-Ip': simulatorIp,
+        ...buildAuthHeaders(),
+      },
       validateStatus: () => true,
       timeout: REQUEST_TIMEOUT_MS,
-    });
+    }));
 
     if (summary) {
       summary.requests += 1;
@@ -57,17 +134,22 @@ async function sendRequest(api, opts = {}, summary) {
     }
 
     console.log(
-      `[Attack] ${label.padEnd(22)} | IP: ${ip.padEnd(15)} | ${api.method} ${api.endpoint} → ${response.status}`
+      `[Attack] ${label.padEnd(22)} | IP: ${ip.padEnd(15)} | ${api.method} ${requestUrl} → ${response.status}`
     );
     return response.status;
   } catch (err) {
-    console.error(`[Attack] Network error on ${api.endpoint}: ${err.message}`);
+    console.error(`[Attack] Network error on ${requestUrl}: ${err.message}`);
     return null;
   }
 }
 
 // ── Attack 1: Brute-Force Login ─────────────────────────────────────────────
 async function bruteForceLogin(apis, summary) {
+  if (!ENABLE_BRUTE_FORCE) {
+    console.log('[Attack] Brute-force scenario skipped (ENABLE_BRUTE_FORCE=false).');
+    return;
+  }
+
   const loginApi = findLoginEndpoint(apis);
   if (!loginApi) {
     console.error('[Attack] No writable endpoints available for brute-force.');
@@ -78,14 +160,14 @@ async function bruteForceLogin(apis, summary) {
   const attackerIp = '192.168.100.50';
   const passwords = ['password', '123456', 'admin', 'letmein', 'qwerty', 'monkey', 'dragon'];
 
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 10 * ATTACK_SCALE; i++) {
     const pwd = passwords[i % passwords.length];
     await sendRequest(loginApi, {
       ip: attackerIp,
       data: { username: 'admin', password: pwd },
       label: `brute-force #${i + 1}`,
-    }, summary);
-    await sleep(100);
+    }, summary, bruteForceLogin.limiter);
+    await sleep(ATTACK_PACING_MS);
   }
 }
 
@@ -101,12 +183,12 @@ async function endpointFlooding(apis, summary) {
   console.log(`\n[Attack] ━━━ ENDPOINT FLOODING (targeting ${target.endpoint}) ━━━\n`);
   const attackerIp = '172.16.50.20';
 
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 12 * ATTACK_SCALE; i++) {
     await sendRequest(target, {
       ip: attackerIp,
       label: `flood request #${i + 1}`,
-    }, summary);
-    await sleep(50);
+    }, summary, endpointFlooding.limiter);
+    await sleep(ATTACK_PACING_MS);
   }
 }
 
@@ -124,16 +206,19 @@ async function trafficBurst(apis, summary) {
 
   console.log('[Attack] Phase 1: establishing baseline (3 slow requests)...');
   for (let i = 0; i < 3; i++) {
-    await sendRequest(target, { ip: attackerIp, label: `baseline #${i + 1}` }, summary);
+    await sendRequest(target, { ip: attackerIp, label: `baseline #${i + 1}` }, summary, trafficBurst.limiter);
     await sleep(5000);
   }
 
-  console.log('[Attack] Phase 2: burst (20 rapid requests)...');
+  console.log(`[Attack] Phase 2: burst (${10 * ATTACK_SCALE} paced requests)...`);
   const burstPromises = [];
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 10 * ATTACK_SCALE; i++) {
     burstPromises.push(
-      sendRequest(target, { ip: attackerIp, label: `burst #${i + 1}` }, summary)
+      sendRequest(target, { ip: attackerIp, label: `burst #${i + 1}` }, summary, trafficBurst.limiter)
     );
+    if (SAFE_MODE) {
+      await sleep(ATTACK_PACING_MS);
+    }
   }
   await Promise.all(burstPromises);
 }
@@ -157,8 +242,8 @@ async function distributedAbuse(apis, summary) {
   ];
 
   const allRequests = attackerIps.flatMap((ip) =>
-    Array.from({ length: 12 }, (_, i) =>
-      sendRequest(target, { ip, label: `distributed #${i + 1}` }, summary)
+    Array.from({ length: 6 * ATTACK_SCALE }, (_, i) =>
+      sendRequest(target, { ip, label: `distributed #${i + 1}` }, summary, distributedAbuse.limiter)
     )
   );
 
@@ -175,17 +260,26 @@ const attacks = {
 async function run(options = {}) {
   const apis = await fetchRegisteredApis();
   if (apis.length === 0) {
-    console.error('[Attack] No INTERNAL registered APIs available for attack simulation.');
-    process.exit(1);
+    console.error('[Attack] No eligible INTERNAL APIs available for attack simulation.');
+    return;
   }
 
   const summary = options.summary || null;
+  const limiter = createLimiter(Math.max(1, MAX_IN_FLIGHT));
+  const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
   const attackType = options.attackType || ATTACK_TYPE;
   const loop = Boolean(options.loop);
   const intervalMs = options.intervalMs || 5000;
 
+  // Attach limiter references used by individual scenarios.
+  bruteForceLogin.limiter = limiter;
+  endpointFlooding.limiter = limiter;
+  trafficBurst.limiter = limiter;
+  distributedAbuse.limiter = limiter;
+
   console.log(`\n[Attack Traffic Simulator] Target: ${BASE_URL}`);
   console.log(`[Attack Traffic Simulator] APIs: ${apis.length} registered endpoints`);
+  console.log(`[Attack Traffic Simulator] Safe: ${SAFE_MODE ? 'ON' : 'OFF'} | InFlight: ${MAX_IN_FLIGHT} | Scale: ${ATTACK_SCALE}`);
 
   async function runOnce(name, fn) {
     if (summary) summary.attackTypes.add(name);
@@ -199,8 +293,9 @@ async function run(options = {}) {
       process.exit(1);
     }
     if (loop) {
-      while (true) {
+      while (!shouldStop()) {
         await runOnce(attackType, fn);
+        if (shouldStop()) break;
         await sleep(intervalMs);
       }
     } else {
@@ -208,11 +303,13 @@ async function run(options = {}) {
     }
   } else {
     if (loop) {
-      while (true) {
+      while (!shouldStop()) {
         for (const [name, fn] of Object.entries(attacks)) {
+          if (shouldStop()) break;
           console.log(`\n\n[Attack] ════════════════ Starting: ${name} ════════════════`);
           await runOnce(name, fn);
           console.log(`\n[Attack] ════════════════ Completed: ${name} ════════════════`);
+          if (shouldStop()) break;
           await sleep(intervalMs);
         }
       }

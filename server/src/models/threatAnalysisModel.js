@@ -2,8 +2,20 @@
 
 const { query } = require('../config/db');
 
-async function getAlertSummary(windowMs) {
+async function getAlertSummary(windowMs, userId = null) {
+  if (!userId) {
+    return {
+      total_alerts: 0,
+      ml_alerts: 0,
+      rule_alerts: 0,
+      critical_alerts: 0,
+      last_alert_at: null,
+    };
+  }
+
   const since = new Date(Date.now() - windowMs).toISOString();
+  const params = [since, userId];
+
   const result = await query(
     `SELECT
        COUNT(*)::int AS total_alerts,
@@ -12,28 +24,36 @@ async function getAlertSummary(windowMs) {
        COUNT(*) FILTER (WHERE severity = 'critical')::int AS critical_alerts,
        MAX(timestamp) AS last_alert_at
      FROM alerts
-     WHERE timestamp >= $1`,
-    [since]
+     WHERE timestamp >= $1 AND user_id = $2`,
+    params
   );
   return result.rows[0] || null;
 }
 
-async function getRuleBreakdown(windowMs) {
+async function getRuleBreakdown(windowMs, userId = null) {
+  if (!userId) return [];
+
   const since = new Date(Date.now() - windowMs).toISOString();
+  const params = [since, userId];
+
   const result = await query(
     `SELECT rule_triggered, source, COUNT(*)::int AS cnt
      FROM alerts
-     WHERE timestamp >= $1
+     WHERE timestamp >= $1 AND user_id = $2
      GROUP BY rule_triggered, source
      ORDER BY cnt DESC`,
-    [since]
+    params
   );
   return result.rows;
 }
 
-async function getTimeline(limit = 100, source) {
+async function getTimeline(limit = 100, userId = null, source = null) {
+  if (!userId) return [];
+
   const params = [limit];
-  const clauses = [];
+  const clauses = ['user_id = $2'];
+
+  params.push(userId);
 
   if (source) {
     params.push(source);

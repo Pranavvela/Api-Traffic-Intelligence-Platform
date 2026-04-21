@@ -1,67 +1,74 @@
 'use strict';
 
 const { addBlockedIp, removeBlockedIp, getAllBlockedIps } = require('../models/blocklistModel');
+const { createSetStore } = require('./store');
+const logger = require('../utils/logger');
 
-/**
- * In-memory cache of blocked IPs for fast middleware lookups.
- * Seeded from the database on startup via seedCache().
- */
-const blockedSet = new Set();
+const blockedSet = createSetStore();
 
-/**
- * Seed the in-memory set from the database.
- * Call once during application startup.
- */
+function scopedKey(userId, ip) {
+  return `${userId}:${normalizeIp(ip)}`;
+}
+
 async function seedCache() {
   try {
-    const rows = await getAllBlockedIps();
-    rows.forEach((row) => blockedSet.add(row.ip));
-    console.log(`[Blocklist] Cache seeded — ${blockedSet.size} blocked IP(s).`);
+    // Tenant rows are lazily warmed per user during requests.
+    logger.info('Blocklist cache seed skipped (tenant-scoped mode)');
   } catch (err) {
-    console.error('[Blocklist] Failed to seed cache:', err.message);
+    logger.error('Blocklist cache seed failed', { error: err.message });
   }
 }
 
-/**
- * Check whether an IP is currently blocked.
- * @param {string} ip
- * @returns {boolean}
- */
-function isBlocked(ip) {
-  return blockedSet.has(ip);
+function isBlocked(userId, ip) {
+  if (!userId) return false;
+  return blockedSet.has(scopedKey(userId, ip));
 }
 
-/**
- * Block an IP — updates both the DB and the in-memory cache.
- * @param {string} ip
- * @param {string} [reason]
- * @returns {Promise<Object>}
- */
-async function blockIp(ip, reason) {
-  const row = await addBlockedIp(ip, reason);
-  blockedSet.add(ip);
-  console.log(`[Blocklist] Blocked IP: ${ip} — ${reason || 'no reason given'}.`);
+async function blockIp(userId, ip, reason) {
+  if (!userId) return null;
+
+  const normalizedIp = normalizeIp(ip);
+
+  const row = await addBlockedIp(userId, normalizedIp, reason);
+  blockedSet.add(scopedKey(userId, normalizedIp));
+
+  logger.warn('Blocked IP', { userId, ip: normalizedIp, reason: reason || null });
   return row;
 }
 
-/**
- * Unblock an IP — updates both the DB and the in-memory cache.
- * @param {string} ip
- * @returns {Promise<boolean>}
- */
-async function unblockIp(ip) {
-  await removeBlockedIp(ip);
-  blockedSet.delete(ip);
-  console.log(`[Blocklist] Unblocked IP: ${ip}.`);
+async function unblockIp(userId, ip) {
+  if (!userId) return false;
+
+  const normalizedIp = normalizeIp(ip);
+
+  await removeBlockedIp(userId, normalizedIp);
+  blockedSet.delete(scopedKey(userId, normalizedIp));
+
+  logger.info('Unblocked IP', { userId, ip: normalizedIp });
   return true;
 }
 
-/**
- * Return all blocked IPs from the database.
- * @returns {Promise<Object[]>}
- */
-async function listBlockedIps() {
-  return getAllBlockedIps();
+async function listBlockedIps(userId) {
+  if (!userId) return [];
+
+  const rows = await getAllBlockedIps(userId);
+  rows.forEach((row) => blockedSet.add(scopedKey(userId, row.ip)));
+  return rows;
 }
 
-module.exports = { seedCache, isBlocked, blockIp, unblockIp, listBlockedIps };
+/**
+ * Ensure consistency between stored IPs and middleware IPs
+ */
+function normalizeIp(ip) {
+  if (ip === '::1') return '127.0.0.1';
+  if (ip.startsWith('::ffff:')) return ip.replace('::ffff:', '');
+  return ip;
+}
+
+module.exports = {
+  seedCache,
+  isBlocked,
+  blockIp,
+  unblockIp,
+  listBlockedIps,
+};

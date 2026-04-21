@@ -5,6 +5,9 @@ const cors = require('cors');
 const morgan = require('morgan');
 const config = require('./config/config');
 const requestLogger = require('./middleware/logger');
+const { attachAuth, requireAuth } = require('./middleware/authMiddleware');
+const logger = require('./utils/logger');
+const { pool } = require('./config/db');
 
 // Route modules
 const apiRoutes = require('./routes/apiRoutes');
@@ -17,38 +20,74 @@ const blockedIpsRoutes = require('./routes/blockedIpsRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const simulatorRoutes = require('./routes/simulatorRoutes');
 const threatAnalysisRoutes = require('./routes/threatAnalysisRoutes');
+const proxyRoutes = require('./routes/proxyRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 const app = express();
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
-app.use(
-  cors({
-    origin: config.cors.clientOrigin,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
+// ─── CORS ─────────────────────────────────────────────
+app.use(cors({
+  origin: true,
+  credentials: true,
+}));
 
-// ─── Body parsing ─────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '1mb' }));
+// ─── Disable Cache ────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+// ─── Body Parsing ─────────────────────────────────────
+app.use(express.json({ limit: config.server.requestBodyLimit }));
 app.use(express.urlencoded({ extended: false }));
 
-// ─── HTTP dev logger (morgan — stdout only) ───────────────────────────────────
+// ─── Dev Logger ───────────────────────────────────────
 if (config.server.nodeEnv === 'development') {
   app.use(morgan('dev'));
 }
 
-// ─── Traffic logger middleware (persists to DB + triggers detection) ──────────
-app.use(requestLogger);
+// ─── Attach Auth Context (NON-BLOCKING) ───────────────
+app.use(attachAuth);
 
-// ─── Health check (excluded from persistent logging via early return) ─────────
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// ─── HEALTH (no auth, no logger interference) ─────────
+app.get('/health', async (_req, res) => {
+  const response = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+  };
+
+  if (config.health.includeDbStatus) {
+    try {
+      await pool.query('SELECT 1');
+      response.db = 'ok';
+    } catch (err) {
+      logger.warn('Health check DB query failed', { error: err.message });
+      response.db = 'error';
+    }
+  }
+
+  res.json(response);
 });
 
-// ─── Simulated target endpoints (the API being "monitored") ──────────────────
-// These exist so that the traffic simulator has real endpoints to hit.
-app.post('/api/login', (req, res) => {
+app.get('/', (_req, res) => {
+  res.json({
+    success: true,
+    service: 'api-traffic-intelligence-server',
+    status: 'running',
+    health: '/health',
+  });
+});
+
+// ─── 🔥 PUBLIC AUTH ROUTES (LOGIN / REGISTER) ─────────
+app.use('/api', authRoutes);
+
+// ─── 🔥 REQUEST LOGGER (after login allowed) ──────────
+app.use(requestLogger);
+
+// ─── 🔥 SIMULATOR TARGET APIS (SEPARATE PREFIX) ───────
+app.post('/sim/login', (req, res) => {
   const { username, password } = req.body || {};
   if (username === 'admin' && password === 'secret') {
     return res.status(200).json({ message: 'Login successful.' });
@@ -56,47 +95,55 @@ app.post('/api/login', (req, res) => {
   res.status(401).json({ message: 'Invalid credentials.' });
 });
 
-app.get('/api/search', (_req, res) => {
+app.get('/sim/search', (_req, res) => {
   res.json({ results: ['item1', 'item2', 'item3'] });
 });
 
-app.get('/api/products', (_req, res) => {
+app.get('/sim/products', (_req, res) => {
   res.json({ products: [] });
 });
 
-app.get('/api/users', (_req, res) => {
+app.get('/sim/users', (_req, res) => {
   res.json({ users: [] });
 });
 
-app.get('/api/dashboard', (_req, res) => {
+app.get('/sim/dashboard', (_req, res) => {
   res.json({ widgets: [] });
 });
 
-// ─── Intelligence platform routes ─────────────────────────────────────────────
-app.use('/api/logs',     apiRoutes);
-app.use('/api/alerts',   alertRoutes);
-app.use('/api/stats',    statsRoutes);
-app.use('/api/block-ip', blocklistRoutes);
-app.use('/api', registeredApiRoutes);
-app.use('/api', blockedIpsRoutes);
-app.use('/api', settingsRoutes);
-app.use('/api', simulatorRoutes);
-app.use('/api', threatAnalysisRoutes);
-app.use('/ml', mlRoutes);
+// ─── 🔒 PROTECTED ROUTES ──────────────────────────────────────────────────────
+app.use('/api/logs', requireAuth, apiRoutes);
+app.use('/api/alerts', requireAuth, alertRoutes);
+app.use('/api/stats', requireAuth, statsRoutes);
+app.use('/api/block-ip', requireAuth, blocklistRoutes);
+app.use('/api', requireAuth, registeredApiRoutes);
+app.use('/api', requireAuth, blockedIpsRoutes);
+app.use('/api', requireAuth, settingsRoutes);
+app.use('/api', requireAuth, simulatorRoutes);
+app.use('/api', requireAuth, threatAnalysisRoutes);
 
-// ─── 404 handler ──────────────────────────────────────────────────────────────
+app.use('/ml', requireAuth, mlRoutes);
+app.use('/proxy', requireAuth, proxyRoutes);
+
+// ─── 404 ──────────────────────────────────────────────
 app.use((_req, res) => {
-  res.status(404).json({ success: false, message: 'Route not found.' });
+  res.status(404).json({
+    success: false,
+    message: 'Route not found.',
+    code: 'NOT_FOUND',
+  });
 });
 
-// ─── Global error handler ─────────────────────────────────────────────────────
-// eslint-disable-next-line no-unused-vars
+// ─── ERROR HANDLER ────────────────────────────────────
 app.use((err, _req, res, _next) => {
-  console.error('[App] Unhandled error:', err.message);
+  logger.error('Unhandled error', { error: err.message });
+
   const status = err.status || 500;
+
   res.status(status).json({
     success: false,
     message: err.message || 'Internal server error.',
+    code: err.code || 'INTERNAL_ERROR',
   });
 });
 
