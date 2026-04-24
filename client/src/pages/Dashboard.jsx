@@ -69,6 +69,7 @@ export default function Dashboard() {
   const [trafficGraph, setTrafficGraph] = useState([]);
   const [attackers, setAttackers] = useState([]);
   const [trafficRange, setTrafficRange] = useState('5m');
+  const [activeTab, setActiveTab] = useState('alerts');
   const pollRef = useRef(null);
   const isFetchingRef = useRef(false); // 🔥 prevents overlapping calls
 
@@ -119,10 +120,11 @@ export default function Dashboard() {
 
   const topIps = summary?.topIps || [];
   const endpoints = summary?.endpointStats || [];
-  const activeAlertsCount = alerts.filter((a) => !a.resolved).length;
+  const unresolvedAlerts = Number(summary?.unresolvedAlerts ?? 0);
+  const activeAlertsCount = Number.isFinite(unresolvedAlerts) ? unresolvedAlerts : 0;
   const threatScoreValue = Number(summary?.threatScore || 0);
   let threatLevel = 'Low';
-  if (activeAlertsCount > 0 || threatScoreValue >= 25) {
+  if (unresolvedAlerts > 0 || threatScoreValue >= 25) {
     threatLevel = 'High';
   } else if (threatScoreValue >= 10) {
     threatLevel = 'Medium';
@@ -163,37 +165,117 @@ export default function Dashboard() {
         onRangeChange={setTrafficRange}
       />
 
-      {/* ───────────── PANELS ───────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-        <div className="glass-panel p-4">
-          <h3 className="text-white mb-3">Live Alerts</h3>
-          <AlertPanel alerts={alerts} onResolved={loadAll} />
+      {/* ───────────── PANELS WITH TAB NAVIGATION ───────────── */}
+      <div className="glass-panel rounded-3xl overflow-hidden">
+        
+        {/* Tab Navbar */}
+        <div className="flex border-b border-slate-600">
+          <button
+            onClick={() => setActiveTab('alerts')}
+            className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${
+              activeTab === 'alerts'
+                ? 'bg-sky-500/20 text-sky-300 border-b-2 border-sky-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Live Alerts
+          </button>
+          <button
+            onClick={() => setActiveTab('logs')}
+            className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${
+              activeTab === 'logs'
+                ? 'bg-sky-500/20 text-sky-300 border-b-2 border-sky-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Recent Logs
+          </button>
+          <button
+            onClick={() => setActiveTab('ips-endpoints')}
+            className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${
+              activeTab === 'ips-endpoints'
+                ? 'bg-sky-500/20 text-sky-300 border-b-2 border-sky-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Top IPs & Endpoints
+          </button>
+          <button
+            onClick={() => setActiveTab('attackers')}
+            className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${
+              activeTab === 'attackers'
+                ? 'bg-sky-500/20 text-sky-300 border-b-2 border-sky-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Top Attackers
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${
+              activeTab === 'history'
+                ? 'bg-sky-500/20 text-sky-300 border-b-2 border-sky-400'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Resolved Alerts
+          </button>
         </div>
 
-        <div className="glass-panel p-4">
-          <h3 className="text-white mb-3">Recent Logs</h3>
-          <LogTable logs={logs} />
-        </div>
+        {/* Tab Content */}
+        <div className="p-6">
+          {activeTab === 'alerts' && (
+            <div>
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-white">Live Alerts</h3>
+                <p className="text-sm text-slate-400 mt-1">Active threats requiring attention</p>
+              </div>
+              <AlertPanel alerts={alerts} onResolved={loadAll} />
+            </div>
+          )}
 
-        <div className="glass-panel p-4">
-          <h3 className="text-white mb-3">Top IPs</h3>
-          <TopIpsPanel topIps={topIps} />
-        </div>
+          {activeTab === 'logs' && (
+            <div>
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-white">Recent Logs</h3>
+                <p className="text-sm text-slate-400 mt-1">Latest API activity and requests</p>
+              </div>
+              <LogTable logs={logs} />
+            </div>
+          )}
 
-        <div className="glass-panel p-4">
-          <h3 className="text-white mb-3">Endpoints</h3>
-          <EndpointStatsPanel endpoints={endpoints} />
-        </div>
+          {activeTab === 'ips-endpoints' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <h3 className="text-lg font-semibold text-white mb-4">Top IPs</h3>
+                <TopIpsPanel topIps={topIps} />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white mb-4">Endpoints</h3>
+                <EndpointStatsPanel endpoints={endpoints} />
+              </div>
+            </div>
+          )}
 
-        <div className="glass-panel p-4">
-          <h3 className="text-white mb-3">Attackers</h3>
-          <TopAttackersPanel attackers={attackers} />
-        </div>
+          {activeTab === 'attackers' && (
+            <div>
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-white">Top Attackers</h3>
+                <p className="text-sm text-slate-400 mt-1">Most active threat sources</p>
+              </div>
+              <TopAttackersPanel attackers={attackers} />
+            </div>
+          )}
 
-        <div className="glass-panel p-4">
-          <h3 className="text-white mb-3">Resolved Alerts</h3>
-          <AlertHistory alerts={alertHistory} />
+          {activeTab === 'history' && (
+            <div>
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-white">Resolved Alerts</h3>
+                <p className="text-sm text-slate-400 mt-1">Previously addressed security events</p>
+              </div>
+              <AlertHistory alerts={alertHistory} />
+            </div>
+          )}
         </div>
 
       </div>

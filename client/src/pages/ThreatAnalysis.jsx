@@ -116,9 +116,15 @@ async function loadMlModels() {
 
   async function runDetect() {
     setLoading(true);
+    setMessage('');
     setError('');
     try {
       const res = await detectMl();
+      if (!res?.trained) {
+        setAnomalies([]);
+        setError('Model is not trained yet. Train a model before viewing anomalies.');
+        return;
+      }
       const results = res?.results || [];
       setAnomalies(results.filter((r) => r.ml_label === 'ANOMALY'));
     } catch (err) {
@@ -133,10 +139,26 @@ async function loadMlModels() {
     setMessage('');
     setError('');
     try {
-      const res = await trainMl({});
-      setStatus(res.data || null);
-      setMessage('Model trained successfully.');
+      const data = await trainMl({});
+      if (!data?.trained) {
+        setError(data?.reason || 'Training did not complete.');
+        await loadMlModels();
+        return;
+      }
+
+      setStatus(data || null);
       await loadMlModels();
+
+      const version = data?.modelVersion;
+      const samples = data?.sampleCount;
+      const duration = data?.trainingDurationMs;
+
+      if (version && samples !== undefined) {
+        const durationText = duration ? ` in ${duration}ms` : '';
+        setMessage(`Model v${version} trained with ${samples} samples${durationText}.`);
+      } else {
+        setMessage('Model trained successfully.');
+      }
     } catch (err) {
       setError(err.message || 'Training failed.');
     } finally {
@@ -150,11 +172,11 @@ async function loadMlModels() {
     setError('');
     try {
       const selectedModel = models.find((model) => String(model.id) === String(modelId));
-      const res = await activateMlModel(modelId);
-      if (res.data) {
-        setStatus((current) => (current ? { ...current, ...res.data } : res.data));
+      const data = await activateMlModel(modelId);
+      if (data) {
+        setStatus((current) => (current ? { ...current, ...data } : data));
       }
-      const activatedVersion = res.data?.version || res.data?.modelVersion || selectedModel?.version;
+      const activatedVersion = data?.model_version || data?.modelVersion || selectedModel?.model_version;
       setMessage(
         activatedVersion ? `Model v${activatedVersion} activated.` : 'Model activated successfully.'
       );
@@ -224,10 +246,6 @@ async function loadMlModels() {
     setAnomalySortConfig({ fields: anomalyDraftFields, direction: anomalyDraftDirection });
     setAnomalySortOpen(false);
   }
-
-  const safeModels = Array.isArray(models) ? models : [];
-  const safeTimeline = Array.isArray(timeline) ? timeline : [];
-  const safeRules = Array.isArray(rules) ? rules : [];
 
   return (
     <div className="space-y-6">

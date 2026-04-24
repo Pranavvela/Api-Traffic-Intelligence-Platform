@@ -2,6 +2,7 @@ import React from 'react';
 import PropTypes from 'prop-types';
 import { resolveAlert, blockIp } from '../services/api';
 import TableSortDialog from './TableSortDialog';
+import InfoTooltip from './InfoTooltip';
 import { sortRows } from '../utils/tableSort';
 
 const SEVERITY_CLASS = {
@@ -158,14 +159,10 @@ export default function AlertPanel({ alerts, onResolved }) {
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Active Alerts</div>
           <div className="flex items-center gap-2 text-lg font-semibold text-white">
             <span>Incident Queue</span>
-            <span className="group relative inline-flex">
-              <span className="inline-flex h-5 w-5 cursor-help items-center justify-center rounded-full border border-sky-300/40 bg-sky-500/10 text-[11px] font-semibold text-sky-200">
-                i
-              </span>
-              <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden w-80 -translate-x-1/2 rounded-lg border border-white/15 bg-slate-900/95 px-3 py-2 text-xs font-normal leading-5 text-slate-200 shadow-xl group-hover:block">
-                Displays unresolved alerts for monitored registered APIs. Severity/source and risk score are derived from rule triggers, anomaly score, and alert frequency.
-              </span>
-            </span>
+            <InfoTooltip 
+              title="Active Alerts" 
+              description="Unresolved security alerts for monitored APIs. Severity is based on rule violations and anomaly detection. Alert count tracks how many times the same IP has triggered rules." 
+            />
           </div>
         </div>
         <div className="flex items-center gap-3 text-sm font-semibold text-amber-200">

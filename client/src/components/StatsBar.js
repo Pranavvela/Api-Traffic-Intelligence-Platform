@@ -9,8 +9,9 @@ export default function StatsBar({ summary, threatLevel }) {
   const threat = summary?.threatScore ?? '—';
   const topIp = summary?.topIps?.[0]?.ip || summary?.top_attackers?.[0]?.ip || '—';
 
-  const numericThreat = Number(threat);
+  const numericRpm = Number(rpm);
   const numericAlerts = Number(alerts);
+  const numericThreat = Number(threat);
 
   function deriveThreatLevel() {
     if (Number.isFinite(numericAlerts) && numericAlerts > 0) return 'High';
@@ -26,10 +27,10 @@ export default function StatsBar({ summary, threatLevel }) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
       <DashboardCard title="Threat Level" value={threatLabel} meta={threatMeta} />
-      <DashboardCard title="Requests / min (avg 5m)" value={rpm} meta={rpm > 50 ? 'High volume' : 'Stable'} />
+      <DashboardCard title="Requests / min (avg 5m)" value={rpm} meta={numericRpm > 50 ? 'High volume' : 'Stable'} />
       <DashboardCard title="Requests (60s)" value={total} meta="Last minute" />
-      <DashboardCard title="Unresolved Alerts" value={alerts} meta={alerts > 0 ? 'Needs attention' : 'All clear'} />
-      <DashboardCard title="Threat Score" value={threat} meta={threat > 20 ? 'Elevated' : 'Normal'} />
+      <DashboardCard title="Unresolved Alerts" value={alerts} meta={numericAlerts > 0 ? 'Needs attention' : 'All clear'} />
+      <DashboardCard title="Threat Score" value={threat} meta={numericThreat > 20 ? 'Elevated' : 'Normal'} />
       <DashboardCard title="Top IP" value={topIp} meta="Most active" />
     </div>
   );

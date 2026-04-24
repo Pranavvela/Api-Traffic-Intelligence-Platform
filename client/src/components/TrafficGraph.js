@@ -173,5 +173,8 @@ function fmtBucket(ts, range) {
   if (range === '7d' || range === '1m') {
     return d.toLocaleDateString([], { month: 'short', day: '2-digit' });
   }
+  if (range === '24h') {
+    return d.toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }

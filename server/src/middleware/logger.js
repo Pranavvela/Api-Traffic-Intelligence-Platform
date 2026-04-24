@@ -10,6 +10,26 @@ const logger = require('../utils/logger');
 
 const EXCLUDED_PREFIXES = ['/api/logs', '/api/alerts', '/api/stats', '/api/block-ip', '/health'];
 
+async function persistRejectedLog({ req, userId, ip, statusCode, isBlocked }) {
+  try {
+    await insertLog({
+      requestId: uuidv4(),
+      userId,
+      ip,
+      method: req.method,
+      endpoint: req.originalUrl,
+      statusCode,
+      responseMs: 0,
+      userAgent: req.headers['user-agent'] || null,
+      alertTriggered: false,
+      isBlocked: Boolean(isBlocked),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.warn('Failed to persist rejected proxy log', { error: err.message, ip, statusCode });
+  }
+}
+
 function isInternalRoute(path) {
   const prefixes = config.allowlist.internalPrefixes || [];
   return prefixes.some((prefix) => path.startsWith(prefix));
@@ -20,6 +40,9 @@ function requestLogger(req, res, next) {
   if (isExcluded) return next();
 
   const ip = normaliseIp(req);
+  const simulatorFlag = String(req.headers['x-simulator-traffic'] || '').toLowerCase() === 'true';
+  const simulatorMode = String(req.headers['x-simulator-mode'] || '').toLowerCase();
+  const isSimulatorNormal = simulatorFlag && simulatorMode === 'normal';
 
   const isProxyRequest = req.originalUrl.startsWith('/proxy');
   const isApiRequest = req.originalUrl.startsWith('/api');
@@ -31,7 +54,8 @@ function requestLogger(req, res, next) {
   if (!isProxyRequest && !isApiRequest) return next();
 
   // ── BLOCKING (ONLY FOR PROXY TRAFFIC) ─────────────────────────────
-  if (isProxyRequest && !isInternal && blocklist.isBlocked(userId, ip)) {
+  if (isProxyRequest && !isInternal && !isSimulatorNormal && blocklist.isBlocked(userId, ip)) {
+    persistRejectedLog({ req, userId, ip, statusCode: 403, isBlocked: true }).catch(() => {});
     return res.status(403).json({
       success: false,
       message: 'Your IP has been blocked.',
@@ -40,10 +64,11 @@ function requestLogger(req, res, next) {
   }
 
   // ── THROTTLING (ONLY FOR PROXY TRAFFIC) ───────────────────────────
-  if (isProxyRequest && !isInternal && throttling.isThrottled(userId, ip)) {
+  if (isProxyRequest && !isInternal && !isSimulatorNormal && throttling.isThrottled(userId, ip)) {
     const shouldReject = throttling.shouldReject(userId, ip, req.originalUrl);
 
     if (shouldReject) {
+      persistRejectedLog({ req, userId, ip, statusCode: 429, isBlocked: false }).catch(() => {});
       return res.status(429).json({
         success: false,
         message: 'Too many requests. Please try again later.',
@@ -64,6 +89,8 @@ function requestLogger(req, res, next) {
       requestId,
       userId,
       ip,
+      simulatorFlag,
+      simulatorMode,
       method: req.method,
       endpoint: req.originalUrl,
       statusCode: res.statusCode,

@@ -18,6 +18,7 @@ async function getSummary(req, res, next) {
   try {
     const windowMs = Number.parseInt(req.query.windowMs, 10) || 60_000;
     const rpmWindowMs = Number.parseInt(req.query.rpmWindowMs, 10) || 300_000;
+    const threatWindowMs = Number.parseInt(req.query.threatWindowMs, 10) || 3_600_000;
     const userId = req.user?.id || null;
 
     const [requestCount, rpmCount, unresolvedAlerts, topIps, endpointStats, topAttackers] = await Promise.all([
@@ -26,7 +27,7 @@ async function getSummary(req, res, next) {
       countUnresolved(userId),
       getTopIps(windowMs, 10, userId),
       getEndpointStats(windowMs, userId),
-      getTopAttackers(windowMs, 5, userId),
+      getTopAttackers(threatWindowMs, 5, userId),
     ]);
 
     const requestsPerMinute = Math.round((rpmCount / rpmWindowMs) * 60_000);
@@ -36,6 +37,7 @@ async function getSummary(req, res, next) {
       data: {
         windowMs,
         rpmWindowMs,
+        threatWindowMs,
         requestCount,
         requestsPerMinute,
         unresolvedAlerts,

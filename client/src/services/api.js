@@ -119,14 +119,14 @@ export const fetchMlStatus = async () =>
 export const fetchMlModels = async () =>
   extract(await client.get(`/ml/models`));
 
-export const trainMl = () =>
-  client.post(`/ml/train`);
+export const trainMl = async (data = {}) =>
+  extract(await client.post(`/ml/train`, data));
 
 export const detectMl = async () =>
   extract(await client.get(`/ml/detect`));
 
-export const activateMlModel = (id) =>
-  client.post(`/ml/models/${id}/activate`);
+export const activateMlModel = async (id) =>
+  extract(await client.post(`/ml/models/${id}/activate`));
 
 // ───────────── THREAT ANALYSIS ─────────────
 

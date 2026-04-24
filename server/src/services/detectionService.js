@@ -34,7 +34,12 @@ async function applyProgressiveEscalation({
   repeatCount,
   settings,
   isMlAnomaly,
+  isSimulatorNormal,
 }) {
+  if (isSimulatorNormal) {
+    return 'NONE';
+  }
+
   const blockThreshold = settings.blockScoreThreshold || 250;
   const throttleThreshold = settings.throttleScoreThreshold || 120;
 
@@ -74,6 +79,7 @@ async function analyse(logEntry, savedLog) {
   const { ip, endpoint, statusCode } = logEntry;
   const userId = logEntry.userId || null;
   const settings = settingsService.getSettings(userId);
+  const isSimulatorNormal = logEntry.simulatorFlag && logEntry.simulatorMode === 'normal';
 
   const tracker = actorKey(userId, ip);
 
@@ -166,6 +172,7 @@ async function analyse(logEntry, savedLog) {
     repeatCount,
     settings,
     isMlAnomaly,
+    isSimulatorNormal,
   });
 }
 

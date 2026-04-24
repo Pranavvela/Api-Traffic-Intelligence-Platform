@@ -33,6 +33,9 @@ export default function Login({ onLogin }) {
       }
 
       setToken(token);
+      // Clear form after successful login
+      setEmail('');
+      setPassword('');
       onLogin();
     } catch (err) {
       const message = err?.response?.data?.message || err.message || 'Login failed.';
@@ -40,6 +43,15 @@ export default function Login({ onLogin }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleModeSwitch() {
+    // Clear form and error when switching between login and register
+    setIsRegister((prev) => !prev);
+    setEmail('');
+    setPassword('');
+    setError('');
+    setShowPassword(false);
   }
 
   return (
@@ -70,6 +82,7 @@ export default function Login({ onLogin }) {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 required
+                autoComplete="off"
                 className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white focus:border-sky-400 focus:outline-none"
                 placeholder="analyst@example.com"
               />
@@ -85,6 +98,7 @@ export default function Login({ onLogin }) {
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   required
+                  autoComplete="new-password"
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 pr-11 text-sm text-white focus:border-sky-400 focus:outline-none"
                   placeholder="••••••••"
                 />
@@ -143,7 +157,7 @@ export default function Login({ onLogin }) {
             <button
               type="button"
               className="text-sky-300 hover:text-sky-200"
-              onClick={() => setIsRegister((prev) => !prev)}
+              onClick={handleModeSwitch}
             >
               {isRegister ? 'Sign in' : 'Create account'}
             </button>

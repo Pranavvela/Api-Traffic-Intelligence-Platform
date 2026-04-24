@@ -1,6 +1,7 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import TableSortDialog from './TableSortDialog';
+import InfoTooltip from './InfoTooltip';
 import { sortRows } from '../utils/tableSort';
 
 const SORT_FIELDS = [
@@ -45,7 +46,13 @@ export default function LogTable({ logs }) {
     <section className="glass-panel rounded-2xl">
       <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Live API Logs</div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Live API Logs</span>
+            <InfoTooltip 
+              title="Live API Logs" 
+              description="Real-time request logs showing all API calls with method, endpoint, response code, IP source, and response time." 
+            />
+          </div>
           <div className="text-lg font-semibold text-white">Recent Requests</div>
         </div>
         <div className="flex items-center gap-3 text-sm text-slate-400">

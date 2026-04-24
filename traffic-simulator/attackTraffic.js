@@ -85,7 +85,8 @@ async function fetchRegisteredApis() {
     const type = String(api.api_type || 'INTERNAL').toUpperCase();
     const endpoint = String(api.endpoint || '');
     if (isExcludedEndpoint(endpoint)) return false;
-    return api.is_active !== false && api.validation_status !== 'INVALID' && type === 'INTERNAL';
+    // Support both INTERNAL and EXTERNAL APIs
+    return api.is_active !== false && api.validation_status !== 'INVALID' && ['INTERNAL', 'EXTERNAL'].includes(type);
   });
 }
 
@@ -106,23 +107,40 @@ function resolveRequestUrl(endpoint) {
   return `${BASE_URL}/${raw}`;
 }
 
-async function sendRequest(api, opts = {}, summary, limiter) {
-  const { ip = '10.0.0.1', data, label = '' } = opts;
+function isProxyStyleEndpoint(endpoint) {
+  const raw = String(endpoint || '').trim().toLowerCase();
+  if (!raw) return false;
+  if (raw.startsWith('/proxy/')) return true;
+  return raw.includes('/proxy/');
+}
+
+async function sendRequest(api, opts, summary, limiter, isExternal = false) {
+  const safeOpts = opts || {};
+  const { ip = '10.0.0.1', data, label = '' } = safeOpts;
   const simulatorIp = ip || SIMULATOR_IP_FALLBACK;
-  const requestUrl = resolveRequestUrl(api.endpoint);
+  const targetUrl = resolveRequestUrl(api.endpoint);
+  const requestUrl = isExternal || isProxyStyleEndpoint(api.endpoint)
+    ? targetUrl
+    : `${BASE_URL}/proxy/${targetUrl}`;
   try {
+    const headers = {
+      'X-Simulator-Traffic': 'true',
+      'X-Simulator-Mode': 'attack',
+      'X-Simulator-Source': SIMULATOR_SOURCE,
+      'X-Simulator-Ip': simulatorIp,
+    };
+
+    // Only add auth header for internal APIs
+    if (!isExternal) {
+      headers['X-Forwarded-For'] = simulatorIp;
+      Object.assign(headers, buildAuthHeaders());
+    }
+
     const response = await limiter.withLimit(() => axios({
       method: api.method,
       url: requestUrl,
       data,
-      headers: {
-        'X-Forwarded-For': simulatorIp,
-        'X-Simulator-Traffic': 'true',
-        'X-Simulator-Mode': 'attack',
-        'X-Simulator-Source': SIMULATOR_SOURCE,
-        'X-Simulator-Ip': simulatorIp,
-        ...buildAuthHeaders(),
-      },
+      headers,
       validateStatus: () => true,
       timeout: REQUEST_TIMEOUT_MS,
     }));
@@ -144,7 +162,7 @@ async function sendRequest(api, opts = {}, summary, limiter) {
 }
 
 // ── Attack 1: Brute-Force Login ─────────────────────────────────────────────
-async function bruteForceLogin(apis, summary) {
+async function bruteForceLogin(apis, summary, apiTypeMap = {}) {
   if (!ENABLE_BRUTE_FORCE) {
     console.log('[Attack] Brute-force scenario skipped (ENABLE_BRUTE_FORCE=false).');
     return;
@@ -159,6 +177,7 @@ async function bruteForceLogin(apis, summary) {
   console.log(`\n[Attack] ━━━ BRUTE-FORCE LOGIN (targeting ${loginApi.endpoint}) ━━━\n`);
   const attackerIp = '192.168.100.50';
   const passwords = ['password', '123456', 'admin', 'letmein', 'qwerty', 'monkey', 'dragon'];
+  const isExternal = apiTypeMap[loginApi.endpoint] === 'EXTERNAL';
 
   for (let i = 0; i < 10 * ATTACK_SCALE; i++) {
     const pwd = passwords[i % passwords.length];
@@ -166,13 +185,13 @@ async function bruteForceLogin(apis, summary) {
       ip: attackerIp,
       data: { username: 'admin', password: pwd },
       label: `brute-force #${i + 1}`,
-    }, summary, bruteForceLogin.limiter);
+    }, summary, bruteForceLogin.limiter, isExternal);
     await sleep(ATTACK_PACING_MS);
   }
 }
 
 // ── Attack 2: Endpoint Flooding ─────────────────────────────────────────────
-async function endpointFlooding(apis, summary) {
+async function endpointFlooding(apis, summary, apiTypeMap = {}) {
   const getApis = apis.filter((a) => a.method === 'GET');
   const target = getApis[0] || apis[0];
   if (!target) {
@@ -182,18 +201,19 @@ async function endpointFlooding(apis, summary) {
 
   console.log(`\n[Attack] ━━━ ENDPOINT FLOODING (targeting ${target.endpoint}) ━━━\n`);
   const attackerIp = '172.16.50.20';
+  const isExternal = apiTypeMap[target.endpoint] === 'EXTERNAL';
 
   for (let i = 0; i < 12 * ATTACK_SCALE; i++) {
     await sendRequest(target, {
       ip: attackerIp,
       label: `flood request #${i + 1}`,
-    }, summary, endpointFlooding.limiter);
+    }, summary, endpointFlooding.limiter, isExternal);
     await sleep(ATTACK_PACING_MS);
   }
 }
 
 // ── Attack 3: Traffic Burst ─────────────────────────────────────────────────
-async function trafficBurst(apis, summary) {
+async function trafficBurst(apis, summary, apiTypeMap = {}) {
   const getApis = apis.filter((a) => a.method === 'GET');
   const target = getApis[0] || apis[0];
   if (!target) {
@@ -203,10 +223,11 @@ async function trafficBurst(apis, summary) {
 
   console.log(`\n[Attack] ━━━ TRAFFIC BURST (targeting ${target.endpoint}) ━━━\n`);
   const attackerIp = '10.20.30.40';
+  const isExternal = apiTypeMap[target.endpoint] === 'EXTERNAL';
 
   console.log('[Attack] Phase 1: establishing baseline (3 slow requests)...');
   for (let i = 0; i < 3; i++) {
-    await sendRequest(target, { ip: attackerIp, label: `baseline #${i + 1}` }, summary, trafficBurst.limiter);
+    await sendRequest(target, { ip: attackerIp, label: `baseline #${i + 1}` }, summary, trafficBurst.limiter, isExternal);
     await sleep(5000);
   }
 
@@ -214,7 +235,7 @@ async function trafficBurst(apis, summary) {
   const burstPromises = [];
   for (let i = 0; i < 10 * ATTACK_SCALE; i++) {
     burstPromises.push(
-      sendRequest(target, { ip: attackerIp, label: `burst #${i + 1}` }, summary, trafficBurst.limiter)
+      sendRequest(target, { ip: attackerIp, label: `burst #${i + 1}` }, summary, trafficBurst.limiter, isExternal)
     );
     if (SAFE_MODE) {
       await sleep(ATTACK_PACING_MS);
@@ -224,7 +245,7 @@ async function trafficBurst(apis, summary) {
 }
 
 // ── Attack 4: Distributed Abuse ─────────────────────────────────────────────
-async function distributedAbuse(apis, summary) {
+async function distributedAbuse(apis, summary, apiTypeMap = {}) {
   const getApis = apis.filter((a) => a.method === 'GET');
   const target = getApis[0] || apis[0];
   if (!target) {
@@ -240,10 +261,11 @@ async function distributedAbuse(apis, summary) {
     '192.0.2.13',
     '192.0.2.14',
   ];
+  const isExternal = apiTypeMap[target.endpoint] === 'EXTERNAL';
 
   const allRequests = attackerIps.flatMap((ip) =>
     Array.from({ length: 6 * ATTACK_SCALE }, (_, i) =>
-      sendRequest(target, { ip, label: `distributed #${i + 1}` }, summary, distributedAbuse.limiter)
+      sendRequest(target, { ip, label: `distributed #${i + 1}` }, summary, distributedAbuse.limiter, isExternal)
     )
   );
 
@@ -260,9 +282,15 @@ const attacks = {
 async function run(options = {}) {
   const apis = await fetchRegisteredApis();
   if (apis.length === 0) {
-    console.error('[Attack] No eligible INTERNAL APIs available for attack simulation.');
+    console.error('[Attack] No eligible registered APIs available for attack simulation.');
     return;
   }
+
+  // Build map of endpoint -> api type for sendRequest to handle correctly
+  const apiTypeMap = {};
+  apis.forEach((api) => {
+    apiTypeMap[api.endpoint] = api.api_type || 'INTERNAL';
+  });
 
   const summary = options.summary || null;
   const limiter = createLimiter(Math.max(1, MAX_IN_FLIGHT));
@@ -277,13 +305,16 @@ async function run(options = {}) {
   trafficBurst.limiter = limiter;
   distributedAbuse.limiter = limiter;
 
+  const internalCount = apis.filter((a) => a.api_type === 'INTERNAL').length;
+  const externalCount = apis.filter((a) => a.api_type === 'EXTERNAL').length;
+
   console.log(`\n[Attack Traffic Simulator] Target: ${BASE_URL}`);
-  console.log(`[Attack Traffic Simulator] APIs: ${apis.length} registered endpoints`);
+  console.log(`[Attack Traffic Simulator] APIs: ${apis.length} registered (${internalCount} internal, ${externalCount} external)`);
   console.log(`[Attack Traffic Simulator] Safe: ${SAFE_MODE ? 'ON' : 'OFF'} | InFlight: ${MAX_IN_FLIGHT} | Scale: ${ATTACK_SCALE}`);
 
   async function runOnce(name, fn) {
     if (summary) summary.attackTypes.add(name);
-    await fn(apis, summary);
+    await fn(apis, summary, apiTypeMap);
   }
 
   if (attackType) {

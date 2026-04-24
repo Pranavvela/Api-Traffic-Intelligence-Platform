@@ -1,6 +1,7 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import TableSortDialog from './TableSortDialog';
+import InfoTooltip from './InfoTooltip';
 import { sortRows } from '../utils/tableSort';
 
 const SEVERITY_CLASS = {
@@ -79,7 +80,13 @@ export default function AlertHistory({ alerts }) {
     <section className="glass-panel rounded-2xl">
       <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Alert History</div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Alert History</span>
+            <InfoTooltip 
+              title="Alert History" 
+              description="Resolved and closed security alerts from the past. Shows patterns of previously addressed threats and mitigation actions taken." 
+            />
+          </div>
           <div className="text-lg font-semibold text-white">Resolved Incidents</div>
         </div>
         <div className="flex items-center gap-3 text-sm text-slate-400">

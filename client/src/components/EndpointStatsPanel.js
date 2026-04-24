@@ -1,5 +1,6 @@
 import React from 'react';
 import PropTypes from 'prop-types';
+import InfoTooltip from './InfoTooltip';
 
 export default function EndpointStatsPanel({ endpoints }) {
   const max = endpoints[0]?.request_count || 1;
@@ -8,7 +9,13 @@ export default function EndpointStatsPanel({ endpoints }) {
     <section className="glass-panel rounded-2xl">
       <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Endpoint Traffic</div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Endpoint Traffic</span>
+            <InfoTooltip 
+              title="Endpoint Traffic" 
+              description="API endpoints receiving the most requests in the last 60 seconds. Higher traffic indicates busier endpoints." 
+            />
+          </div>
           <div className="text-lg font-semibold text-white">Top Endpoints (60s)</div>
         </div>
         <div className="text-sm text-slate-400">{endpoints.length} endpoints</div>

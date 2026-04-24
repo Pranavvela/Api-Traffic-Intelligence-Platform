@@ -1,5 +1,6 @@
 import React from 'react';
 import PropTypes from 'prop-types';
+import InfoTooltip from './InfoTooltip';
 
 export default function TopIpsPanel({ topIps }) {
   const max = topIps[0]?.request_count || 1;
@@ -8,7 +9,13 @@ export default function TopIpsPanel({ topIps }) {
     <section className="glass-panel rounded-2xl">
       <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Top IPs</div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Top IPs</span>
+            <InfoTooltip 
+              title="Top IPs" 
+              description="IP addresses with the highest request volume in the last 60 seconds. High request counts (>10) are highlighted in red." 
+            />
+          </div>
           <div className="text-lg font-semibold text-white">Most Active (60s)</div>
         </div>
         <div className="text-sm text-slate-400">{topIps.length} IPs</div>

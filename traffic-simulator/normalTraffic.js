@@ -119,7 +119,8 @@ async function fetchRegisteredApis() {
     const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
     if (!ALLOW_WRITE_NORMAL && isWrite) return false;
     if (isExcludedEndpoint(endpoint)) return false;
-    return api.is_active !== false && api.validation_status !== 'INVALID' && type === 'INTERNAL';
+    // Support both INTERNAL and EXTERNAL APIs
+    return api.is_active !== false && api.validation_status !== 'INVALID' && ['INTERNAL', 'EXTERNAL'].includes(type);
   });
 }
 
@@ -202,23 +203,32 @@ function makeStep(api, label, thinkMs, dataOverride) {
   };
 }
 
-async function sendRequest(ip, userAgent, step, summary, limiter) {
+async function sendRequest(ip, userAgent, step, summary, limiter, isExternal = false) {
   try {
     const simulatorIp = ip || SIMULATOR_IP_FALLBACK;
 
-    const requestUrl = `${BASE_URL}/proxy/${resolveRequestUrl(step.path)}`;
+    // For external APIs, request directly; for internal, use proxy
+    const requestUrl = isExternal ? resolveRequestUrl(step.path) : `${BASE_URL}/proxy/${resolveRequestUrl(step.path)}`;
 
-    const res = await limiter.withLimit(() => axios({
+    const headers = {
+      'User-Agent': userAgent,
+      'X-Simulator-Traffic': 'true',
+      'X-Simulator-Mode': 'normal',
+      'X-Simulator-Source': SIMULATOR_SOURCE,
+      'X-Simulator-Ip': simulatorIp,
+    };
+
+    // Only add internal-specific headers for internal APIs
+    if (!isExternal) {
+      headers['X-Forwarded-For'] = simulatorIp;
+      Object.assign(headers, buildAuthHeaders());
+    }
+
+    await limiter.withLimit(() => axios({
       method: step.method,
       url: requestUrl,
       data: step.data,
-      headers: {
-        'X-Forwarded-For': simulatorIp,
-        'User-Agent': userAgent,
-        'X-Simulator-Traffic': 'true',
-        'X-Simulator-Mode': 'normal',
-        'Authorization': `Bearer ${SIM_AUTH_TOKEN}`, // ✅ IMPORTANT
-      },
+      headers,
       validateStatus: () => true,
       timeout: REQUEST_TIMEOUT_MS,
     }));
@@ -235,7 +245,7 @@ async function sendRequest(ip, userAgent, step, summary, limiter) {
  * One virtual user: loops forever, each iteration picks a random flow
  * and executes its steps with realistic think-time pauses between them.
  */
-async function virtualUser(flowPool, summary, limiter, shouldStop) {
+async function virtualUser(flowPool, summary, limiter, shouldStop, apiTypeMap = {}) {
   await sleep(Math.random() * 8000);
 
   const ip = pick(IP_POOL);
@@ -246,7 +256,8 @@ async function virtualUser(flowPool, summary, limiter, shouldStop) {
 
     for (const step of flow.steps) {
       if (shouldStop()) break;
-      await sendRequest(ip, userAgent, step, summary, limiter);
+      const isExternal = apiTypeMap[step.path] === 'EXTERNAL';
+      await sendRequest(ip, userAgent, step, summary, limiter, isExternal);
       await sleep(jitter(300, step.thinkMs || 1000));
     }
 
@@ -258,7 +269,7 @@ async function virtualUser(flowPool, summary, limiter, shouldStop) {
  * Rush-hour manager: every 2 minutes, spawn extra users for 20 seconds
  * to simulate a short-lived spike.
  */
-async function rushHourManager(flowPool, concurrency, summary, limiter, shouldStop) {
+async function rushHourManager(flowPool, concurrency, summary, limiter, shouldStop, apiTypeMap = {}) {
   while (!shouldStop()) {
     await sleep(120_000);
     if (shouldStop()) break;
@@ -275,7 +286,8 @@ async function rushHourManager(flowPool, concurrency, summary, limiter, shouldSt
         const flow = pick(flowPool);
         for (const step of flow.steps) {
           if (shouldStop()) break;
-          await sendRequest(ip, userAgent, step, summary, limiter);
+          const isExternal = apiTypeMap[step.path] === 'EXTERNAL';
+          await sendRequest(ip, userAgent, step, summary, limiter, isExternal);
           await sleep(jitter(100, 400));
         }
       })();
@@ -293,12 +305,21 @@ async function run(options = {}) {
   const shouldStop = typeof options.shouldStop === 'function' ? options.shouldStop : () => false;
   const apis = await fetchRegisteredApis();
   if (apis.length === 0) {
-    console.error('[Simulator] No eligible registered APIs found. Register safe INTERNAL endpoints first.');
+    console.error('[Simulator] No eligible registered APIs found. Register safe endpoints first.');
     return;
   }
 
+  // Build map of endpoint -> api type for sendRequest to handle correctly
+  const apiTypeMap = {};
+  apis.forEach((api) => {
+    apiTypeMap[api.endpoint] = api.api_type || 'INTERNAL';
+  });
+
   const flows = buildFlows(apis);
-  const weightedFlows = flows.flatMap((f) => Array(f.weight).fill(f));
+  const weightedFlows = flows.flatMap((f) => new Array(f.weight).fill(f));
+
+  const internalCount = apis.filter((a) => a.api_type === 'INTERNAL').length;
+  const externalCount = apis.filter((a) => a.api_type === 'EXTERNAL').length;
 
   console.log(`\n${'═'.repeat(60)}`);
   console.log('  Dynamic Normal-Traffic Simulator');
@@ -307,12 +328,12 @@ async function run(options = {}) {
   console.log(`  Safe    : ${SAFE_MODE ? 'ON' : 'OFF'}`);
   console.log(`  Writes  : ${ALLOW_WRITE_NORMAL ? 'ENABLED' : 'DISABLED'}`);
   console.log(`  InFlight: ${MAX_IN_FLIGHT}`);
-  console.log(`  APIs    : ${apis.length} registered endpoints`);
+  console.log(`  APIs    : ${apis.length} registered (${internalCount} internal, ${externalCount} external)`);
   console.log(`${'═'.repeat(60)}\n`);
 
-  const workers = Array.from({ length: USERS }, () => virtualUser(weightedFlows, summary, limiter, shouldStop));
+  const workers = Array.from({ length: USERS }, () => virtualUser(weightedFlows, summary, limiter, shouldStop, apiTypeMap));
   if (ENABLE_RUSH_HOUR) {
-    workers.push(rushHourManager(weightedFlows, USERS, summary, limiter, shouldStop));
+    workers.push(rushHourManager(weightedFlows, USERS, summary, limiter, shouldStop, apiTypeMap));
   }
 
   await Promise.all(workers);

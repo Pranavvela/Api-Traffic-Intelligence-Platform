@@ -1,5 +1,6 @@
 import React from 'react';
 import PropTypes from 'prop-types';
+import InfoTooltip from './InfoTooltip';
 
 export default function TopAttackersPanel({ attackers }) {
   const maxScore = attackers.length > 0 ? attackers[0].score : 1;
@@ -8,7 +9,13 @@ export default function TopAttackersPanel({ attackers }) {
     <section className="glass-panel rounded-2xl">
       <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Top Attackers</div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Top Attackers</span>
+            <InfoTooltip 
+              title="Top Attackers" 
+              description="IPs ranked by threat score. Score is calculated from alert frequency, rule violations, and ML anomaly detection. Higher scores indicate more dangerous sources." 
+            />
+          </div>
           <div className="text-lg font-semibold text-white">Ranked by Score</div>
         </div>
         <div className="text-sm text-slate-400">{attackers.length} IPs</div>

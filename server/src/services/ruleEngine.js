@@ -4,6 +4,53 @@
 const sw = require('./slidingWindowService');
 const logger = require('../utils/logger');
 const settingsService = require('./settingsService');
+const config = require('../config/config');
+
+// ─── IP Whitelist for traffic simulator and internal monitoring ──────────────
+function getWhitelistedIps() {
+  const envWhitelist = process.env.WHITELISTED_IPS || '';
+  const simIps = process.env.SIMULATOR_WHITELIST || 
+    '198.18.0.10,203.0.113.0/24,198.51.100.0/24,192.0.2.0/24,100.64.0.0/16,185.100.0.0/16';
+  const combined = [envWhitelist, simIps].filter(Boolean).join(',');
+  return combined.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function matchesCidr(ip, cidr) {
+  try {
+    const [cidrAddr, maskBits] = cidr.split('/');
+    const mask = Number.parseInt(maskBits, 10);
+    if (!Number.isFinite(mask)) return false;
+    
+    const cidrParts = cidrAddr.split('.').map(Number);
+    const ipParts = ip.split('.').map(Number);
+    
+    if (cidrParts.length !== 4 || ipParts.length !== 4) return false;
+    
+    for (let i = 0; i < 4; i++) {
+      if (Number.isNaN(cidrParts[i]) || Number.isNaN(ipParts[i])) return false;
+    }
+    
+    const bytesToCheck = Math.floor(mask / 8);
+    for (let i = 0; i < bytesToCheck; i++) {
+      if (cidrParts[i] !== ipParts[i]) return false;
+    }
+    
+    const remainingBits = mask % 8;
+    if (remainingBits === 0) return true;
+    
+    const bitMask = (0xff << (8 - remainingBits)) & 0xff;
+    return (cidrParts[bytesToCheck] & bitMask) === (ipParts[bytesToCheck] & bitMask);
+  } catch {
+    return false;
+  }
+}
+
+function isIpWhitelisted(ip) {
+  if (!ip) return false;
+  return getWhitelistedIps().some(pattern => 
+    pattern.includes('/') ? matchesCidr(ip, pattern) : pattern === ip
+  );
+}
 
 /**
  * Rule definitions.
@@ -165,11 +212,19 @@ const rules = [
 
 /**
  * Evaluate all rules against a log entry.
+ * Skips evaluation if IP is whitelisted (simulator, internal monitoring, etc.)
  *
  * @param {Object} logEntry  Normalised request log
  * @returns {Array<{ ruleId: string, severity: string, reason: string }>}
  */
 function evaluateAll(logEntry) {
+  const { ip } = logEntry;
+  
+  // Skip detection for whitelisted IPs (simulator, internal traffic, etc.)
+  if (isIpWhitelisted(ip)) {
+    return [];
+  }
+  
   const violations = [];
 
   for (const rule of rules) {
@@ -190,4 +245,4 @@ function evaluateAll(logEntry) {
   return violations;
 }
 
-module.exports = { evaluateAll, rules };
+module.exports = { evaluateAll, rules, isIpWhitelisted, getWhitelistedIps };

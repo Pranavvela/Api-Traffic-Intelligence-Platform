@@ -9,6 +9,8 @@ const REGISTERED_API_FILTER = `EXISTS (
     AND (
       ra.endpoint = api_logs.endpoint
       OR api_logs.endpoint = regexp_replace(ra.endpoint, '^https?://[^/]+', '')
+      OR api_logs.endpoint = '/proxy/' || ltrim(ra.endpoint, '/')
+      OR api_logs.endpoint = '/proxy/' || ltrim(regexp_replace(ra.endpoint, '^https?://[^/]+', ''), '/')
     )
     AND UPPER(ra.method) = UPPER(api_logs.method)
     AND ra.is_active = TRUE
@@ -242,15 +244,32 @@ async function getTrafficByBucket(windowMs, bucketSeconds, userId = null) {
   const params = [safeBucketSeconds, since, userId];
 
   const result = await query(
-    `SELECT
-       to_timestamp(floor(extract(epoch from timestamp) / $1) * $1) AS bucket,
-       COUNT(*) AS request_count
-     FROM api_logs
-     WHERE timestamp >= $2
-       AND user_id = $3
-       AND ${REGISTERED_API_FILTER}
-     GROUP BY bucket
-     ORDER BY bucket ASC`,
+    `WITH bounds AS (
+       SELECT
+         to_timestamp(floor(extract(epoch from $2::timestamptz) / $1) * $1) AS start_bucket,
+         to_timestamp(floor(extract(epoch from NOW()) / $1) * $1) AS end_bucket
+     ),
+     traffic AS (
+       SELECT
+         to_timestamp(floor(extract(epoch from timestamp) / $1) * $1) AS bucket,
+         COUNT(*)::int AS request_count
+       FROM api_logs
+       WHERE timestamp >= $2
+         AND user_id = $3
+         AND ${REGISTERED_API_FILTER}
+       GROUP BY bucket
+     )
+     SELECT
+       series.bucket,
+       COALESCE(traffic.request_count, 0)::int AS request_count
+     FROM bounds
+     CROSS JOIN LATERAL generate_series(
+       bounds.start_bucket,
+       bounds.end_bucket,
+       make_interval(secs => $1::int)
+     ) AS series(bucket)
+     LEFT JOIN traffic ON traffic.bucket = series.bucket
+     ORDER BY series.bucket ASC`,
     params
   );
   return result.rows;
