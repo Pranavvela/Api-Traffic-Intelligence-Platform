@@ -29,6 +29,9 @@ async function start() {
     // Load the previously trained ML model from the database
     await loadMlModel();
 
+    // 🔥 Initialize all automated ML features (drift monitoring, ensemble, etc.)
+    mlService.initializeAutomatedFeatures();
+
     serverRef = app.listen(PORT, HOST, () => {
       const envStr = config.server.nodeEnv;
       const dbStr = `${config.db.host}:${config.db.port}`;
@@ -67,6 +70,9 @@ async function loadMlModel() {
 
 async function shutdown(signal) {
   logger.info('Shutdown signal received', { signal });
+
+  // 🔥 Cleanup automated features
+  mlService.shutdown();
 
   if (serverRef) {
     await new Promise((resolve) => serverRef.close(resolve));

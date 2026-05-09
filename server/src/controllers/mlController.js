@@ -2,6 +2,7 @@
 
 const { getMlFeatures } = require('../services/featureEngineeringService');
 const mlService = require('../services/mlService');
+const driftDetectionService = require('../services/driftDetectionService');
 
 function readFeatureQuery(req) {
   return {
@@ -106,4 +107,30 @@ async function activateModel(req, res, next) {
   }
 }
 
-module.exports = { getFeatures, exportFeatures, trainModel, detectAnomalies, getStatus, listModels, activateModel };
+/**
+ * GET /ml/drift
+ * Analyze and return concept drift detection status
+ */
+async function getDrift(req, res, next) {
+  try {
+    const driftStatus = await driftDetectionService.analyzeDrift();
+    res.json({ success: true, data: driftStatus });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /ml/drift/status
+ * Return current drift detection state without re-analyzing
+ */
+async function getDriftStatus(_req, res, next) {
+  try {
+    const status = driftDetectionService.getDriftStatus();
+    res.json({ success: true, data: status });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getFeatures, exportFeatures, trainModel, detectAnomalies, getStatus, listModels, activateModel, getDrift, getDriftStatus };

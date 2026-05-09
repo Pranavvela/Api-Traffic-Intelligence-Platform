@@ -5,9 +5,12 @@ const settingsService = require('../settingsService');
 const featureCacheService = require('../featureCacheService');
 const baselineService = require('../baselineService');
 const mlModelRepository = require('../../models/mlModelRepository');
+const explainabilityService = require('./explainabilityService');
 const logger = require('../../utils/logger');
 
 const MIN_TRAINING_SAMPLES = 50;
+const ONLINE_LEARNING_ENABLED = true;  // Enable Welford's online update algorithm
+const ONLINE_UPDATE_WEIGHT = 0.05;      // Learning rate for incremental updates
 
 // 🔥 FEATURE WEIGHTS (important improvement)
 const FEATURE_WEIGHTS = {
@@ -67,6 +70,40 @@ function resolveStatsForIp(ip, userId) {
   return { means: modelState.means, stds: modelState.stds };
 }
 
+/**
+ * Welford's Online Algorithm for incremental mean/std updates
+ * Allows real-time model adaptation without full retraining
+ * Paper: "Numerically stable algorithms for variance" (West, 1979)
+ */
+function updateModelStateOnline(newRow, keys) {
+  if (!ONLINE_LEARNING_ENABLED || !modelState.trained) return;
+
+  modelState.sampleCount += 1;
+  const n = modelState.sampleCount;
+
+  keys.forEach((k) => {
+    const value = Number(newRow[k] ?? 0);
+    const oldMean = modelState.means[k] ?? 0;
+    const oldStd = modelState.stds[k] ?? 1e-6;
+
+    // Welford's update formula
+    const delta = value - oldMean;
+    const newMean = oldMean + delta / n;
+    const delta2 = value - newMean;
+    
+    // Incremental variance update (bounded by ONLINE_UPDATE_WEIGHT for stability)
+    const boundedFactor = Math.min(ONLINE_UPDATE_WEIGHT, 1 / n);
+    const oldVariance = oldStd * oldStd;
+    const incrementalVariance = oldVariance + boundedFactor * (delta * delta2 - oldVariance);
+    const newStd = Math.sqrt(Math.max(incrementalVariance, 1e-12));
+
+    modelState.means[k] = Number(newMean.toFixed(6));
+    modelState.stds[k] = Number(newStd.toFixed(6)) || 1e-6;
+  });
+
+  logger.debug('Model online update applied', { sampleCount: modelState.sampleCount });
+}
+
 // 🔥 NEW IMPROVED SCORING FUNCTION
 function scoreRowWithExplainability(row, keys, means, stds, topN = 3) {
   const contributions = keys.map((k) => {
@@ -96,11 +133,18 @@ function scoreRowWithExplainability(row, keys, means, stds, topN = 3) {
 
   contributions.sort((a, b) => b.weighted_z - a.weighted_z);
 
+  // 🔥 Enhanced explainability with feature contributions and interactions
+  const enhancedExplanation = explainabilityService.computeFeatureContributions(row, keys, means, stds, FEATURE_WEIGHTS);
+
   return {
     score: Number(rawScore.toFixed(4)),
     normalized_score: Number(normalizedScore.toFixed(4)),
     explainability: {
       top_features: contributions.slice(0, topN),
+      detailed_breakdown: enhancedExplanation.contributions.slice(0, topN),
+      feature_interactions: enhancedExplanation.featureInteractions,
+      summary: enhancedExplanation.summary,
+      all_contributions: enhancedExplanation.contributions,
     },
   };
 }
@@ -210,6 +254,11 @@ async function detect(opts = {}) {
     const scored = scoreRowWithExplainability(row, keys, means, stds);
 
     const label = scored.score >= modelState.threshold ? 'ANOMALY' : 'NORMAL';
+
+    // Online learning: update model statistics in real-time
+    if (ONLINE_LEARNING_ENABLED && label === 'NORMAL') {
+      updateModelStateOnline(row, keys);
+    }
 
     return {
       ...row,

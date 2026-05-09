@@ -51,14 +51,12 @@ async function register(req, res, next) {
 
     const passwordHash = await bcrypt.hash(String(password), 10);
     const created = await createUser(normalizedEmail, passwordHash);
-    const token = signToken(created);
 
     return res.status(201).json({
       success: true,
+      message: 'Account created successfully. Please sign in with your credentials.',
       data: {
-        user: created,
-        token,
-        expiresIn: config.auth.jwtExpiresIn,
+        user: { id: created.id, email: created.email, created_at: created.created_at },
       },
     });
   } catch (err) {

@@ -27,6 +27,17 @@ export default function Login({ onLogin }) {
         ? await registerUser({ email, password })
         : await login({ email, password });
 
+      if (isRegister) {
+        // Registration successful - switch to login mode
+        setIsRegister(false);
+        setError('');
+        setEmail('');
+        setPassword('');
+        setError('Account created! Please sign in with your credentials.');
+        setLoading(false);
+        return;
+      }
+
       const token = response?.token;
       if (!token) {
         throw new Error('No token returned from server.');

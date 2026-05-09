@@ -1,7 +1,7 @@
 'use strict';
 
 const { Router } = require('express');
-const { getFeatures, exportFeatures, trainModel, detectAnomalies, getStatus, listModels, activateModel } = require('../controllers/mlController');
+const { getFeatures, exportFeatures, trainModel, detectAnomalies, getStatus, listModels, activateModel, getDrift, getDriftStatus } = require('../controllers/mlController');
 
 const router = Router();
 
@@ -25,5 +25,11 @@ router.get('/models', listModels);
 
 // POST /ml/models/:id/activate
 router.post(String.raw`/models/:id(\d+)/activate`, activateModel);
+
+// GET /ml/drift - Analyze concept drift
+router.get('/drift', getDrift);
+
+// GET /ml/drift/status - Get drift status without re-analyzing
+router.get('/drift/status', getDriftStatus);
 
 module.exports = router;
