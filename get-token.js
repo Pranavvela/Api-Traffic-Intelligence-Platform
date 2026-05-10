@@ -42,11 +42,11 @@ async function main() {
 
   // Try login first
   console.log('[1] Attempting login with existing credentials...');
-  let loginRes = await makeRequest('POST', '/api/auth/login', TEST_USER);
+  let loginRes = await makeRequest('POST', '/api/login', TEST_USER);
   
   if (loginRes.status === 401) {
     console.log('    No existing user. Registering new account...');
-    const regRes = await makeRequest('POST', '/api/auth/register', TEST_USER);
+    const regRes = await makeRequest('POST', '/api/register', TEST_USER);
     if (regRes.status !== 201) {
       console.error('    ❌ Registration failed:', regRes.data);
       process.exit(1);
@@ -55,7 +55,7 @@ async function main() {
     
     // Now login
     console.log('[2] Logging in...');
-    loginRes = await makeRequest('POST', '/api/auth/login', TEST_USER);
+    loginRes = await makeRequest('POST', '/api/login', TEST_USER);
   }
 
   if (loginRes.status !== 200) {

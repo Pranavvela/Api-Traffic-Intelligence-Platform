@@ -9,6 +9,7 @@ const {
   updateAlertState,
   autoResolveAlert,
 } = require('../models/alertModel');
+const { insertDetectionResult } = require('../models/mlDetectionModel');
 const { markAlertTriggered } = require('../models/logModel');
 const mlService = require('./mlService');
 const featureCacheService = require('./featureCacheService');
@@ -114,6 +115,32 @@ async function analyse(logEntry, savedLog) {
   }
 
   const isMlAnomaly = mlSignal?.ml_label === 'ANOMALY';
+
+  // Persist ML detection result asynchronously for metrics and charts
+  (async () => {
+    try {
+      if (mlSignal) {
+        // Normalize ensemble vs legacy signal shapes
+        const anomaly_score = mlSignal.anomaly_score ?? mlSignal.ensemble_score ?? mlSignal.ensemble_score ?? 0;
+        const ml_label = mlSignal.ml_label ?? mlSignal.ensemble_label ?? mlSignal.ensemble_label ?? 'NORMAL';
+        const y_pred = ml_label === 'ANOMALY' ? 1 : 0;
+        const result = {
+          userId: userId || null,
+          ip: ip || null,
+          y_true: isMlAnomaly ? 1 : 0,
+          anomaly_score: Number(anomaly_score),
+          y_pred,
+          zscore_score: mlSignal.zscore_component?.score ?? mlSignal.zscore_score ?? null,
+          isolation_forest_score: mlSignal.if_component?.score ?? mlSignal.if_score ?? null,
+          ensemble_confidence: mlSignal.method_agreement_score ?? null,
+        };
+
+        await insertDetectionResult(result);
+      }
+    } catch (e) {
+      logger.warn('Failed to persist ML detection result', { error: e.message });
+    }
+  })();
 
   if (!violations.length && !isMlAnomaly) return;
 

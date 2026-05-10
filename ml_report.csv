@@ -1,0 +1,4 @@
+model_name,accuracy,precision,recall,f1_score,total_samples
+Z-Score,95.0,0.0,,,700
+Isolation Forest,95.0,0.0,,,700
+Ensemble (Current Model),0.0,0.0,,,700

@@ -2,6 +2,21 @@
 
 const { query } = require('../config/db');
 
+// Helper to check whether an alert's endpoint matches a registered API owned by the given user
+function registeredApiExistsSql(paramIndex) {
+  return `EXISTS (
+    SELECT 1 FROM registered_apis ra
+    WHERE ra.user_id = $${paramIndex}
+      AND (
+        ra.endpoint = alerts.endpoint
+        OR alerts.endpoint = regexp_replace(ra.endpoint, '^https?://[^/]+', '')
+        OR alerts.endpoint = '/proxy/' || ltrim(ra.endpoint, '/')
+        OR alerts.endpoint = '/proxy/' || ltrim(regexp_replace(ra.endpoint, '^https?://[^/]+', ''), '/')
+      )
+      AND ra.is_active = TRUE
+  )`;
+}
+
 /**
  * Persist a new alert.
  * @param {Object} alert
@@ -75,8 +90,11 @@ async function getAlerts({ unresolvedOnly = false, limit = 50, offset = 0, userI
     clauses.push('resolved = FALSE');
   }
 
+  // userId will be parameter index 3
   params.push(userId);
-  clauses.push(`user_id = $${params.length}`);
+  const userParamIndex = params.length;
+
+  clauses.push(`(alerts.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})`);
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const result = await query(
@@ -110,8 +128,9 @@ async function resolveAlert(id) {
 async function getAlertById(id, userId = null) {
   if (!userId) return null;
 
+  // allow fetching if alert belongs to user OR its endpoint is registered to the user
   const result = await query(
-    `SELECT * FROM alerts WHERE id = $1 AND user_id = $2`,
+    `SELECT * FROM alerts WHERE id = $1 AND (alerts.user_id = $2 OR ${registeredApiExistsSql(2)})`,
     [id, userId]
   );
   return result.rows[0] || null;
@@ -149,10 +168,9 @@ async function countUnresolved(userId = null) {
   if (!userId) return 0;
 
   const params = [userId];
-  const clauses = ['resolved = FALSE', 'user_id = $1'];
-
+  const userParamIndex = 1;
   const result = await query(
-    `SELECT COALESCE(SUM(alert_count), 0) AS cnt FROM alerts WHERE ${clauses.join(' AND ')}`,
+    `SELECT COALESCE(SUM(alert_count), 0) AS cnt FROM alerts WHERE resolved = FALSE AND (alerts.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})`,
     params
   );
   return Number.parseInt(result.rows[0].cnt, 10);
@@ -168,12 +186,13 @@ async function getAlertsByRule(windowMs = 3600000, userId = null) {
 
   const since = new Date(Date.now() - windowMs).toISOString();
   const params = [since, userId];
-  const clauses = ['timestamp >= $1', 'user_id = $2'];
+  const userParamIndex = 2;
 
   const result = await query(
     `SELECT rule_triggered, COUNT(*) AS cnt
      FROM alerts
-     WHERE ${clauses.join(' AND ')}
+     WHERE timestamp >= $1
+       AND (alerts.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})
      GROUP BY rule_triggered
      ORDER BY cnt DESC`,
     params
@@ -194,13 +213,14 @@ async function findRecentDuplicate(ip, endpoint, ruleTriggered, windowMs = 30_00
 
   const since = new Date(Date.now() - windowMs).toISOString();
   const params = [ip, endpoint, ruleTriggered, since, userId];
+  const userParamIndex = 5;
   const clauses = [
     'ip = $1',
     'endpoint = $2',
     'rule_triggered = $3',
     'resolved = FALSE',
     '(last_seen IS NULL OR last_seen >= $4)',
-    'user_id = $5',
+    `(alerts.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})`,
   ];
 
   const result = await query(
@@ -224,12 +244,13 @@ async function findActiveGroup(ip, endpoint, ruleTriggered, userId = null) {
   if (!userId) return null;
 
   const params = [ip, endpoint, ruleTriggered, userId];
+  const userParamIndex = 4;
   const clauses = [
     'ip = $1',
     'endpoint = $2',
     'rule_triggered = $3',
     'resolved = FALSE',
-    'user_id = $4',
+    `(alerts.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})`,
   ];
 
   const result = await query(
@@ -335,7 +356,8 @@ async function getResolvedAlerts({ limit = 100, offset = 0, userId = null } = {}
   const clauses = ['resolved = TRUE'];
 
   params.push(userId);
-  clauses.push(`user_id = $${params.length}`);
+  const userParamIndex = params.length;
+  clauses.push(`(alerts.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})`);
 
   const result = await query(
     `SELECT * FROM alerts
@@ -353,6 +375,7 @@ async function getResolvedAlerts({ limit = 100, offset = 0, userId = null } = {}
  */
 async function clearAllAlerts(userId = null) {
   if (!userId) return;
+  // Only clear alerts that belong to the user (do not remove alerts from other users)
   await query('DELETE FROM alerts WHERE user_id = $1', [userId]);
 }
 

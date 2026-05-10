@@ -47,7 +47,16 @@ async function trainModel(req, res, next) {
   try {
     const { windowMs, observationMs, threshold, start, end } = req.body || {};
     const userId = req.user?.id || null;
-    const data = await mlService.train({ windowMs, observationMs, threshold, start, end, userId });
+    const effectiveWindowMs = Number.parseInt(windowMs, 10) || 7 * 24 * 60 * 60 * 1000;
+    const effectiveObservationMs = Number.parseInt(observationMs, 10) || 10 * 60 * 1000;
+    const data = await mlService.train({
+      windowMs: effectiveWindowMs,
+      observationMs: effectiveObservationMs,
+      threshold,
+      start,
+      end,
+      userId,
+    });
     res.json({ success: true, data });
   } catch (err) {
     next(err);

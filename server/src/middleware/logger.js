@@ -101,19 +101,27 @@ function requestLogger(req, res, next) {
       timestamp: new Date(startTime).toISOString(),
     };
 
-    try {
-      const savedLog = await insertLog(logEntry);
+      try {
+        const savedLog = await insertLog(logEntry);
 
-      // 🔥 RUN DETECTION FOR BOTH API + PROXY
-      if (isProxyRequest || isApiRequest) {
-        detectionService.analyse(logEntry, savedLog).catch((err) => {
-          logger.error('Detection error', { error: err.message, ip: logEntry.ip });
-        });
+        // Publish log event for live updates (non-blocking)
+        try {
+          const eventBus = require('../services/eventBus');
+          eventBus.emit('log', savedLog);
+        } catch (e) {
+          logger.warn('Failed to publish log event', { error: e.message });
+        }
+
+        // 🔥 RUN DETECTION FOR BOTH API + PROXY
+        if (isProxyRequest || isApiRequest) {
+          detectionService.analyse(logEntry, savedLog).catch((err) => {
+            logger.error('Detection error', { error: err.message, ip: logEntry.ip });
+          });
+        }
+
+      } catch (err) {
+        logger.error('Failed to persist log', { error: err.message, ip: logEntry.ip });
       }
-
-    } catch (err) {
-      logger.error('Failed to persist log', { error: err.message, ip: logEntry.ip });
-    }
   });
 
   next();

@@ -2,19 +2,22 @@
 
 const { query } = require('../config/db');
 
-const REGISTERED_API_FILTER = `EXISTS (
-  SELECT 1
-  FROM registered_apis ra
-  WHERE ra.user_id = api_logs.user_id
-    AND (
-      ra.endpoint = api_logs.endpoint
-      OR api_logs.endpoint = regexp_replace(ra.endpoint, '^https?://[^/]+', '')
-      OR api_logs.endpoint = '/proxy/' || ltrim(ra.endpoint, '/')
-      OR api_logs.endpoint = '/proxy/' || ltrim(regexp_replace(ra.endpoint, '^https?://[^/]+', ''), '/')
-    )
-    AND UPPER(ra.method) = UPPER(api_logs.method)
-    AND ra.is_active = TRUE
-)`;
+// Helper SQL snippet: checks registered_apis owned by a provided user id ($N placeholder)
+// Usage: replace $N with the query parameter index for userId (e.g. $2 or $3).
+function registeredApiExistsSql(paramIndex) {
+  return `EXISTS (
+    SELECT 1 FROM registered_apis ra
+    WHERE ra.user_id = $${paramIndex}
+      AND (
+        ra.endpoint = api_logs.endpoint
+        OR api_logs.endpoint = regexp_replace(ra.endpoint, '^https?://[^/]+', '')
+        OR api_logs.endpoint = '/proxy/' || ltrim(ra.endpoint, '/')
+        OR api_logs.endpoint = '/proxy/' || ltrim(regexp_replace(ra.endpoint, '^https?://[^/]+', ''), '/')
+      )
+      AND UPPER(ra.method) = UPPER(api_logs.method)
+      AND ra.is_active = TRUE
+  )`;
+}
 
 /**
  * Persist a single API request log entry.
@@ -84,10 +87,11 @@ async function markAlertTriggered(requestId) {
 async function getRecentLogs(limit = 100, offset = 0, userId = null) {
   if (!userId) return [];
 
+  const paramIndex = 3;
   const result = await query(
     `SELECT * FROM api_logs
-     WHERE user_id = $3
-       AND ${REGISTERED_API_FILTER}
+     WHERE (api_logs.user_id = $${paramIndex}
+            OR ${registeredApiExistsSql(paramIndex)})
      ORDER BY timestamp DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset, userId]
@@ -142,13 +146,13 @@ async function getEndpointStats(windowMs = 60000, userId = null) {
 
   const since = new Date(Date.now() - windowMs).toISOString();
   const params = [since, userId];
+  const userParamIndex = 2;
 
   const result = await query(
     `SELECT endpoint, COUNT(*) AS request_count
      FROM api_logs
      WHERE timestamp >= $1
-       AND user_id = $2
-       AND ${REGISTERED_API_FILTER}
+       AND (api_logs.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})
      GROUP BY endpoint
      ORDER BY request_count DESC`,
     params
@@ -167,13 +171,13 @@ async function getTopIps(windowMs = 60000, limit = 10, userId = null) {
 
   const since = new Date(Date.now() - windowMs).toISOString();
   const params = [since, limit, userId];
+  const userParamIndex = 3;
 
   const result = await query(
     `SELECT ip, COUNT(*) AS request_count
      FROM api_logs
      WHERE timestamp >= $1
-       AND user_id = $3
-       AND ${REGISTERED_API_FILTER}
+       AND (api_logs.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})
      GROUP BY ip
      ORDER BY request_count DESC
      LIMIT $2`,
@@ -192,13 +196,13 @@ async function countRequestsInLastWindow(windowMs = 60000, userId = null) {
 
   const since = new Date(Date.now() - windowMs).toISOString();
   const params = [since, userId];
+  const userParamIndex = 2;
 
   const result = await query(
     `SELECT COUNT(*) AS cnt
      FROM api_logs
      WHERE timestamp >= $1
-       AND user_id = $2
-       AND ${REGISTERED_API_FILTER}`,
+       AND (api_logs.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})`,
     params
   );
   return Number.parseInt(result.rows[0].cnt, 10);
@@ -214,6 +218,7 @@ async function getTrafficByMinute(minutes = 5, userId = null) {
 
   const since = new Date(Date.now() - minutes * 60_000).toISOString();
   const params = [since, userId];
+  const userParamIndex = 2;
 
   const result = await query(
     `SELECT
@@ -221,8 +226,7 @@ async function getTrafficByMinute(minutes = 5, userId = null) {
        COUNT(*) AS request_count
      FROM api_logs
      WHERE timestamp >= $1
-       AND user_id = $2
-       AND ${REGISTERED_API_FILTER}
+       AND (api_logs.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})
      GROUP BY minute
      ORDER BY minute ASC`,
     params
@@ -240,8 +244,10 @@ async function getTrafficByBucket(windowMs, bucketSeconds, userId = null) {
   if (!userId) return [];
 
   const since = new Date(Date.now() - windowMs).toISOString();
-  const safeBucketSeconds = Math.max(bucketSeconds, 60);
+  // Allow sub-minute buckets for the live 5-minute chart.
+  const safeBucketSeconds = Math.max(Number(bucketSeconds) || 60, 1);
   const params = [safeBucketSeconds, since, userId];
+  const userParamIndex = 3;
 
   const result = await query(
     `WITH bounds AS (
@@ -255,8 +261,7 @@ async function getTrafficByBucket(windowMs, bucketSeconds, userId = null) {
          COUNT(*)::int AS request_count
        FROM api_logs
        WHERE timestamp >= $2
-         AND user_id = $3
-         AND ${REGISTERED_API_FILTER}
+         AND (api_logs.user_id = $${userParamIndex} OR ${registeredApiExistsSql(userParamIndex)})
        GROUP BY bucket
      )
      SELECT

@@ -8,6 +8,7 @@ import {
   fetchMlModels,
   fetchMlStatus,
   trainMl,
+  subscribeEvents,
 } from '../services/api';
 import TableSortDialog from '../components/TableSortDialog';
 import { sortRows } from '../utils/tableSort';
@@ -47,6 +48,7 @@ export default function ThreatAnalysis() {
   const [activatingModelId, setActivatingModelId] = useState(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [trainingHint, setTrainingHint] = useState('');
   const [status, setStatus] = useState(null);
   const [notes, setNotes] = useState('');
   const [timelineSortConfig, setTimelineSortConfig] = useState({ fields: [], direction: 'asc' });
@@ -138,10 +140,26 @@ async function loadMlModels() {
     setTraining(true);
     setMessage('');
     setError('');
+    setTrainingHint('');
     try {
       const data = await trainMl({});
       if (!data?.trained) {
-        setError(data?.reason || 'Training did not complete.');
+        const trainingReason =
+          data?.reason ||
+          data?.zscore?.reason ||
+          data?.isolationForest?.reason ||
+          data?.message ||
+          '';
+
+        const trainingGap = parseTrainingGap(trainingReason);
+        if (trainingGap) {
+          const { current, minimum, remaining } = trainingGap;
+          setTrainingHint(
+            `Need ${remaining} more data points to train (${current}/${minimum} available). Run simulator traffic and try again.`
+          );
+        } else {
+          setError(trainingReason || 'Training did not complete.');
+        }
         await loadMlModels();
         return;
       }
@@ -193,6 +211,26 @@ async function loadMlModels() {
     loadRules();
     loadTimeline();
     loadMlModels();
+    // Subscribe to ML events (trained / activated) so UI updates live
+    const es = subscribeEvents((data) => {
+      try {
+        if (!data) return;
+        if (data.event === 'model_trained') {
+          setMessage(`Model v${data.model_version} trained.`);
+          loadMlModels();
+        }
+        if (data.event === 'model_activated') {
+          setMessage(`Model v${data.model_version} activated.`);
+          loadMlModels();
+        }
+      } catch (e) {
+        // ignore
+      }
+    });
+
+    return () => {
+      try { es && es.close && es.close(); } catch (_) {}
+    };
   }, []);
 
   const ruleBreakdownMax = useMemo(() => {
@@ -433,6 +471,7 @@ async function loadMlModels() {
           </div>
 
           {message && <div className="mt-3 text-sm text-emerald-300">{message}</div>}
+          {trainingHint && <div className="mt-3 text-sm text-amber-300">{trainingHint}</div>}
           {error && <div className="mt-3 text-sm text-rose-300">{error}</div>}
 
           {anomalies.length === 0 && !loading ? (
@@ -716,4 +755,25 @@ function formatExplainability(explainability) {
 
 function fieldLabel(fieldKey, fields) {
   return fields.find((field) => field.key === fieldKey)?.label || fieldKey;
+}
+
+function parseTrainingGap(reason) {
+  if (!reason || typeof reason !== 'string') return null;
+
+  const trainingPattern = /Insufficient training data \((\d+)\)\. Minimum required: (\d+)/i;
+  const match = RegExp.prototype.exec.call(trainingPattern, reason);
+  if (!match) return null;
+
+  const current = Number.parseInt(match[1], 10);
+  const minimum = Number.parseInt(match[2], 10);
+
+  if (!Number.isFinite(current) || !Number.isFinite(minimum) || current >= minimum) {
+    return null;
+  }
+
+  return {
+    current,
+    minimum,
+    remaining: minimum - current,
+  };
 }

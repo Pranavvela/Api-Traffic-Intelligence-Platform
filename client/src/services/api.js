@@ -138,3 +138,28 @@ export const fetchThreatRules = async () =>
 
 export const fetchThreatTimeline = async () =>
   extract(await client.get(`/api/threat-timeline`));
+
+// Subscribe to server-sent events stream (public)
+export function subscribeEvents(onEvent) {
+  try {
+    const url = (process.env.REACT_APP_API_URL || '') + '/events/stream';
+    const es = new EventSource(url);
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        onEvent && onEvent(data);
+      } catch (err) {
+        // ignore parse error
+      }
+    };
+    es.addEventListener('log', (e) => {
+      try { onEvent && onEvent(JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('ml', (e) => {
+      try { onEvent && onEvent(JSON.parse(e.data)); } catch (_) {}
+    });
+    return es;
+  } catch (err) {
+    return null;
+  }
+}

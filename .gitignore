@@ -29,6 +29,9 @@ coverage/
 .vscode/
 .idea/
 
+# Python virtualenv
+.venv/
+
 # temp files
 *.tmp
 *.temp

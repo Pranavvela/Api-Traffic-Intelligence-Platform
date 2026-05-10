@@ -14,10 +14,13 @@ import {
   fetchAlertHistory,
   fetchTrafficGraph,
   fetchAttackers,
+  subscribeEvents,
 } from '../services/api';
 
-// Slightly slower polling improves UI stability during operator actions.
+// Full dashboard refresh is slower because it pulls several panels at once.
 const POLL_INTERVAL_MS = 4000;
+// Traffic graph refreshes independently so the live line keeps moving even if other panels lag.
+const TRAFFIC_POLL_INTERVAL_MS = 2000;
 
 function alertKey(alert, index) {
   if (alert?.id !== undefined && alert?.id !== null) return String(alert.id);
@@ -71,7 +74,9 @@ export default function Dashboard() {
   const [trafficRange, setTrafficRange] = useState('5m');
   const [activeTab, setActiveTab] = useState('alerts');
   const pollRef = useRef(null);
+  const trafficPollRef = useRef(null);
   const isFetchingRef = useRef(false); // 🔥 prevents overlapping calls
+  const isTrafficFetchingRef = useRef(false);
 
   const loadAll = useCallback(async () => {
   if (isFetchingRef.current) return;
@@ -83,14 +88,12 @@ export default function Dashboard() {
       alertsRes,
       summaryRes,
       historyRes,
-      trafficRes,
       attackersRes,
     ] = await Promise.all([
       fetchLogs(100),
       fetchAlerts(false),
       fetchSummary(),
       fetchAlertHistory(50),
-      fetchTrafficGraph({ range: trafficRange }),
       fetchAttackers(),
     ]);
 
@@ -98,7 +101,6 @@ export default function Dashboard() {
     setAlerts((prev) => reconcileAlerts(prev, alertsRes));
     setSummary(summaryRes || null);
     setAlertHistory(Array.isArray(historyRes) ? historyRes : []);
-    setTrafficGraph(Array.isArray(trafficRes) ? trafficRes : []);
     setAttackers(Array.isArray(attackersRes) ? attackersRes : []);
 
   } catch (err) {
@@ -107,16 +109,47 @@ export default function Dashboard() {
     isFetchingRef.current = false;
   }
 }, [trafficRange]);
+
+  const loadTraffic = useCallback(async () => {
+    if (isTrafficFetchingRef.current) return;
+    isTrafficFetchingRef.current = true;
+
+    try {
+      const trafficRes = await fetchTrafficGraph({ range: trafficRange });
+      setTrafficGraph(Array.isArray(trafficRes) ? trafficRes : []);
+    } catch (err) {
+      console.error('Traffic graph fetch failed:', err.message);
+    } finally {
+      isTrafficFetchingRef.current = false;
+    }
+  }, [trafficRange]);
   // 🔥 CLEAN LIVE POLLING
   useEffect(() => {
     loadAll();
+    loadTraffic();
 
     pollRef.current = setInterval(() => {
       loadAll();
     }, POLL_INTERVAL_MS);
 
-    return () => clearInterval(pollRef.current);
-  }, [loadAll]);
+    trafficPollRef.current = setInterval(() => {
+      loadTraffic();
+    }, TRAFFIC_POLL_INTERVAL_MS);
+
+    // Subscribe to server events and trigger immediate refresh on new data
+    const es = subscribeEvents(() => {
+      // lightweight refresh on incoming events
+      loadAll();
+      loadTraffic();
+    });
+
+    // cleanup EventSource
+    return () => {
+      clearInterval(pollRef.current);
+      clearInterval(trafficPollRef.current);
+      es?.close?.();
+    };
+  }, [loadAll, loadTraffic]);
 
   const topIps = summary?.topIps || [];
   const endpoints = summary?.endpointStats || [];
@@ -160,6 +193,7 @@ export default function Dashboard() {
 
       {/* ───────────── GRAPH ───────────── */}
       <TrafficGraph
+        key={`${trafficRange}-${trafficGraph.length}-${trafficGraph.at(-1)?.bucket || trafficGraph.at(-1)?.minute || 'empty'}`}
         data={trafficGraph}
         range={trafficRange}
         onRangeChange={setTrafficRange}

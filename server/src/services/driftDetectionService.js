@@ -89,7 +89,8 @@ async function fetchRecentLogs(lookbackDays = 1) {
     const startDate = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
 
     const result = await query(
-      `SELECT id, ml_label, alert_triggered, timestamp
+      `SELECT id, alert_triggered, timestamp,
+              COALESCE(ml_label, 'NORMAL') AS ml_label
        FROM api_logs
        WHERE timestamp >= $1
        ORDER BY timestamp DESC
@@ -99,6 +100,11 @@ async function fetchRecentLogs(lookbackDays = 1) {
 
     return result.rows;
   } catch (err) {
+    // If column doesn't exist, return empty (drift detection will skip)
+    if (err.message && err.message.includes('does not exist')) {
+      logger.warn('Drift detection skipped: ML columns not yet populated');
+      return [];
+    }
     logger.error('Error fetching logs for drift detection', { error: err.message });
     return [];
   }

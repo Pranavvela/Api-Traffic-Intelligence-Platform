@@ -27,9 +27,20 @@ async function trainEnsemble(opts = {}) {
   try {
     const zscoreResult = await zScoreEngine.train(opts);
     const ifResult = await isolationForestEngine.train(opts);
+    const primaryResult = zscoreResult.trained ? zscoreResult : ifResult;
+    const trained = Boolean(zscoreResult.trained && ifResult.trained);
 
     return {
-      trained: zscoreResult.trained && ifResult.trained,
+      trained,
+      reason: trained ? undefined : (zscoreResult.reason || ifResult.reason || 'Training did not complete.'),
+      modelVersion: primaryResult?.modelVersion ?? primaryResult?.model_version ?? null,
+      sampleCount: primaryResult?.sampleCount ?? primaryResult?.sample_count ?? null,
+      featureCount: primaryResult?.featureCount ?? primaryResult?.feature_count ?? null,
+      threshold: primaryResult?.threshold ?? null,
+      windowMs: primaryResult?.windowMs ?? null,
+      observationMs: primaryResult?.observationMs ?? null,
+      trainingDurationMs: primaryResult?.trainingDurationMs ?? null,
+      engine: 'ensemble',
       zscore: zscoreResult,
       isolationForest: ifResult,
       ensemble_info: 'Both engines trained successfully',
@@ -123,10 +134,8 @@ function mergeDetectionResults(zscoreRows, ifRows, opts) {
     let ensembleLabel = 'NORMAL';
     if (ENSEMBLE_CONFIG.requireAgreement) {
       ensembleLabel = agreement ? 'ANOMALY' : 'NORMAL';
-    } else {
-      // Flag if either method detects high confidence anomaly
-      ensembleLabel =
-        ensembleScore >= ENSEMBLE_CONFIG.agreementThreshold ? 'ANOMALY' : 'NORMAL';
+    } else if (ensembleScore >= ENSEMBLE_CONFIG.agreementThreshold) {
+      ensembleLabel = 'ANOMALY';
     }
 
     return {
@@ -164,16 +173,29 @@ function mergeDetectionResults(zscoreRows, ifRows, opts) {
 }
 
 function computeAgreementScore(zscore, ifAnomaly) {
-  if (zscore && ifAnomaly) return 1.0;      // Both agree - high confidence
-  if (zscore || ifAnomaly) return 0.5;      // Partial agreement
-  return 0.0;                                // No agreement
+  if (zscore && ifAnomaly) return 1;      // Both agree - high confidence
+  if (zscore || ifAnomaly) return 0.5;    // Partial agreement
+  return 0;                               // No agreement
 }
 
 async function statusEnsemble() {
-  const zscoreStatus = await zScoreEngine.status();
+  const zscoreStatus = zScoreEngine.status();
   const ifStatus = await isolationForestEngine.status();
+  const primaryStatus = zscoreStatus.trained ? zscoreStatus : ifStatus;
+  const trained = Boolean(zscoreStatus.trained || ifStatus.trained);
 
   return {
+    trained,
+    trainedAt: primaryStatus?.trainedAt ?? null,
+    sampleCount: primaryStatus?.sampleCount ?? 0,
+    featureCount: primaryStatus?.featureCount ?? 0,
+    threshold: primaryStatus?.threshold ?? null,
+    windowMs: primaryStatus?.windowMs ?? null,
+    observationMs: primaryStatus?.observationMs ?? null,
+    modelId: primaryStatus?.modelId ?? null,
+    modelVersion: primaryStatus?.modelVersion ?? null,
+    isActive: primaryStatus?.isActive ?? false,
+    engine: 'ensemble',
     ensemble: true,
     methods: {
       zscore: zscoreStatus,

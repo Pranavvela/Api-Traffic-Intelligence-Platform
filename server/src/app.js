@@ -22,6 +22,7 @@ const simulatorRoutes = require('./routes/simulatorRoutes');
 const threatAnalysisRoutes = require('./routes/threatAnalysisRoutes');
 const proxyRoutes = require('./routes/proxyRoutes');
 const authRoutes = require('./routes/authRoutes');
+const eventsRoutes = require('./routes/eventsRoutes');
 
 const app = express();
 
@@ -79,6 +80,9 @@ app.get('/', (_req, res) => {
     health: '/health',
   });
 });
+
+// ─── PUBLIC EVENTS (SSE) ─────────────────────────────
+app.use('/events', eventsRoutes);
 
 // ─── 🔥 PUBLIC AUTH ROUTES (LOGIN / REGISTER) ─────────
 app.use('/api', authRoutes);

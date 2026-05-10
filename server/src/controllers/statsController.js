@@ -88,7 +88,8 @@ async function getTrafficGraphHandler(req, res, next) {
   try {
     const range = (req.query.range || '').toLowerCase();
     const ranges = {
-      '5m': { windowMs: 5 * 60_000, bucketSeconds: 60 },
+      // Use finer buckets for the live dashboard so the line visibly moves during polling.
+      '5m': { windowMs: 5 * 60_000, bucketSeconds: 10 },
       '1h': { windowMs: 60 * 60_000, bucketSeconds: 5 * 60 },
       '12h': { windowMs: 12 * 60 * 60_000, bucketSeconds: 15 * 60 },
       '24h': { windowMs: 24 * 60 * 60_000, bucketSeconds: 30 * 60 },

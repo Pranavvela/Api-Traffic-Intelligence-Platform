@@ -3,13 +3,24 @@
 
 const { query } = require('../config/db');
 const logger = require('../utils/logger');
+const eventBus = require('../services/eventBus');
 
 function mapModelRow(row) {
   if (!row) return null;
 
+  // Parse model_data if it's a string (from DB)
+  let parsedData = row.model_data;
+  if (typeof parsedData === 'string') {
+    try {
+      parsedData = JSON.parse(parsedData);
+    } catch (e) {
+      parsedData = {};
+    }
+  }
+
   return {
     id: row.id,
-    model_data: row.model_data,
+    model_data: parsedData,
     engine: row.engine,
     model_version: row.model_version,
     is_active: row.is_active,
@@ -54,6 +65,19 @@ async function saveModel(modelData, engine = 'zscore') {
        RETURNING id, model_data, engine, model_version, is_active, created_at;`,
       [JSON.stringify(modelData), engine, nextVersion]
     );
+    // Publish a lightweight event so frontends can react to newly trained models
+    try {
+      const row = result.rows[0];
+      eventBus.emit('ml_detection', {
+        event: 'model_trained',
+        id: row.id,
+        model_version: row.model_version,
+        engine: row.engine,
+        created_at: row.created_at,
+      });
+    } catch (e) {
+      logger.warn('Failed to publish model_trained event', { error: e.message });
+    }
     return mapModelRow(result.rows[0]);
   } catch (err) {
     logger.error('Error saving ML model', { error: err.message });
@@ -195,6 +219,20 @@ async function activateModel(id, engine = 'zscore') {
        RETURNING id, model_data, engine, model_version, is_active, created_at;`,
       [id, engine]
     );
+
+    // Publish activation event so frontends can update active model view
+    try {
+      const row = result.rows[0];
+      eventBus.emit('ml_detection', {
+        event: 'model_activated',
+        id: row.id,
+        model_version: row.model_version,
+        engine: row.engine,
+        created_at: row.created_at,
+      });
+    } catch (e) {
+      logger.warn('Failed to publish model_activated event', { error: e.message });
+    }
 
     return mapModelRow(result.rows[0] || null);
   } catch (err) {
